@@ -5386,8 +5386,9 @@ async function 注入AdminProxyIP选择器(response) {
 	ensureSelector();
 })();
 </script>`;
-	const 输出HTML = html.includes('</body>')
-		? html.replace('</body>', 注入脚本 + '</body>')
+	const body结束位置 = html.lastIndexOf('</body>');
+	const 输出HTML = body结束位置 > -1
+		? html.slice(0, body结束位置) + 注入脚本 + html.slice(body结束位置)
 		: html + 注入脚本;
 	const headers = new Headers(response.headers);
 	headers.set('Content-Type', 'text/html;charset=utf-8');
