@@ -1,6 +1,7 @@
 ﻿const Version = '2026-06-17 01:41:21';
 let config_JSON, 反代IP = '', 启用SOCKS5反代 = null, 启用SOCKS5全局反代 = false, 我的SOCKS5账号 = '', parsedSocks5Address = {};
 let 缓存SOCKS5白名单 = null, 缓存反代IP, 缓存反代解析数组, 缓存反代数组索引 = 0, 启用反代兜底 = true, 调试日志打印 = false;
+let 缓存国家反代IP池 = null, 缓存国家反代IP池时间 = 0;
 let SOCKS5白名单 = ['*tapecontent.net', '*cloudatacdn.com', '*loadshare.org', '*cdn-centaurus.com', 'scholar.google.com'];
 const Pages静态页面 = 'https://edt-pages.github.io';
 ///////////////////////////////////////////////////////全局常量和工具函数///////////////////////////////////////////////
@@ -293,7 +294,7 @@ export default {
 					}
 
 					ctx.waitUntil(请求日志记录(env, request, 访问IP, 'Admin_Login', config_JSON));
-					return fetch(Pages静态页面 + '/admin' + url.search);
+					return 注入AdminProxyIP选择器(await fetch(Pages静态页面 + '/admin' + url.search));
 				} else if (访问路径 === 'logout' || uuidRegex.test(访问路径)) {//清除cookie并跳转到登录页面
 					const 响应 = new Response('重定向中...', { status: 302, headers: { 'Location': '/login' } });
 					响应.headers.set('Set-Cookie', 'auth=; Path=/; Max-Age=0; HttpOnly');
@@ -395,6 +396,9 @@ export default {
 								完整优选IP = 完整优选IP.concat(优选生成器IP数组);
 								其他节点LINK += 优选生成器其他节点;
 							}
+							const 国家反代IP池 = await 获取国家反代IP池();
+							const 业务优选IP = 生成业务反代优选IP(完整优选IP, 国家反代IP池);
+							if (业务优选IP.length > 0) 完整优选IP = 完整优选IP.concat(业务优选IP);
 							const ECHLINK参数 = config_JSON.ECH ? `&ech=${encodeURIComponent((config_JSON.ECHConfig.SNI ? config_JSON.ECHConfig.SNI + '+' : '') + config_JSON.ECHConfig.DNS)}` : '';
 							const isLoonOrSurge = ua.includes('loon') || ua.includes('surge');
 							const { type: 传输协议, 路径字段名, 域名字段名 } = 获取传输协议配置(config_JSON);
@@ -421,8 +425,12 @@ export default {
 
 								let 完整节点路径 = config_JSON.完整节点路径;
 
+								const 指定反代IP匹配 = 节点备注.match(/\$proxyip=([^#\s]+)/i);
 								const 链式代理匹配 = 节点备注.match(/\$(socks5|http|https|turn|sstp):\/\/([^#\s]+)/i);
-								if (链式代理匹配) {
+								if (指定反代IP匹配) {
+									完整节点路径 = (`${config_JSON.PATH}/proxyip=${指定反代IP匹配[1]}`).replace(/\/\//g, '/') + (config_JSON.启用0RTT ? '?ed=2560' : '');
+									节点备注 = 节点备注.replace(指定反代IP匹配[0], '').trim() || 节点地址;
+								} else if (链式代理匹配) {
 									try {
 										const 代理协议 = 链式代理匹配[1].toLowerCase(), 代理参数 = 链式代理匹配[2];
 										const 链式代理数据 = { type: 代理协议, ...获取SOCKS5账号(代理参数, 获取代理默认端口(代理协议)) };
@@ -5272,6 +5280,212 @@ async function 获取优选订阅生成器数据(优选订阅生成器HOST) {
 	}
 
 	return [优选IP, 其他节点LINK];
+}
+
+async function 注入AdminProxyIP选择器(response) {
+	const contentType = response.headers.get('Content-Type') || '';
+	if (!contentType.toLowerCase().includes('text/html')) return response;
+	const html = await response.text();
+	const 注入脚本 = `<script>
+(() => {
+	const sources = [
+		{ label: 'GuardSkill github', url: 'https://raw.githubusercontent.com/GuardSkill/CFOpt/refs/heads/main/proxyip-best.txt' },
+		{ label: 'zip.cm.edu.kg/all.txt', url: 'https://zip.cm.edu.kg/all.txt' },
+	];
+
+	function parseProxyIPList(text) {
+		return text
+			.split(/\\r?\\n/)
+			.map(line => line.trim())
+			.filter(line => line && !line.startsWith('#'))
+			.map(line => line.split('#')[0].trim())
+			.filter(Boolean)
+			.slice(0, 10)
+			.join(',');
+	}
+
+	function findProxyIPInput() {
+		const labels = Array.from(document.querySelectorAll('label, span, div, p, strong'))
+			.filter(el => el.textContent && el.textContent.trim() === 'PROXYIP');
+		for (const label of labels) {
+			const box = label.closest('div, section, form') || label.parentElement;
+			const input = box && box.querySelector('input:not([type]), input[type="text"], textarea');
+			if (input) return input;
+			const nextInput = label.parentElement && label.parentElement.nextElementSibling
+				? label.parentElement.nextElementSibling.querySelector('input:not([type]), input[type="text"], textarea')
+				: null;
+			if (nextInput) return nextInput;
+		}
+		const inputs = Array.from(document.querySelectorAll('input:not([type]), input[type="text"], textarea'));
+		return inputs.find(input => /(?:^|,)\\d{1,3}(?:\\.\\d{1,3}){3}/.test(input.value || '')) || null;
+	}
+
+	function setNativeValue(input, value) {
+		const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input), 'value');
+		if (descriptor && descriptor.set) descriptor.set.call(input, value);
+		else input.value = value;
+		input.dispatchEvent(new Event('input', { bubbles: true }));
+		input.dispatchEvent(new Event('change', { bubbles: true }));
+	}
+
+	function ensureSelector() {
+		const input = findProxyIPInput();
+		if (!input || document.getElementById('edgetunnel-proxyip-source')) return;
+
+		const wrapper = document.createElement('div');
+		wrapper.id = 'edgetunnel-proxyip-source';
+		wrapper.style.display = 'inline-flex';
+		wrapper.style.alignItems = 'center';
+		wrapper.style.gap = '8px';
+		wrapper.style.marginLeft = '10px';
+		wrapper.style.minWidth = '180px';
+
+		const select = document.createElement('select');
+		select.title = '选择 PROXYIP 来源并填入前 10 个';
+		select.style.height = '38px';
+		select.style.border = '1px solid #d8dee8';
+		select.style.borderRadius = '8px';
+		select.style.padding = '0 30px 0 10px';
+		select.style.background = '#fff';
+		select.style.color = '#1f2937';
+		select.style.fontSize = '14px';
+		select.style.maxWidth = '220px';
+
+		const placeholder = document.createElement('option');
+		placeholder.value = '';
+		placeholder.textContent = '选择 PROXYIP 来源';
+		select.appendChild(placeholder);
+
+		for (const source of sources) {
+			const option = document.createElement('option');
+			option.value = source.url;
+			option.textContent = source.label;
+			select.appendChild(option);
+		}
+
+		const status = document.createElement('span');
+		status.style.fontSize = '12px';
+		status.style.color = '#64748b';
+		status.style.whiteSpace = 'nowrap';
+
+		select.addEventListener('change', async () => {
+			if (!select.value) return;
+			const original = status.textContent;
+			status.textContent = '读取中...';
+			select.disabled = true;
+			try {
+				const res = await fetch(select.value, { cache: 'no-store' });
+				if (!res.ok) throw new Error('HTTP ' + res.status);
+				const value = parseProxyIPList(await res.text());
+				if (!value) throw new Error('列表为空');
+				setNativeValue(input, value);
+				status.textContent = '已填入前 10 个';
+			} catch (error) {
+				status.textContent = '读取失败';
+				console.warn('[edgetunnel] PROXYIP source fetch failed:', error);
+				setTimeout(() => { status.textContent = original; }, 2500);
+			} finally {
+				select.disabled = false;
+			}
+		});
+
+		wrapper.append(select, status);
+		const parent = input.parentElement;
+		if (parent) {
+			parent.style.display = parent.style.display || 'flex';
+			parent.style.alignItems = parent.style.alignItems || 'center';
+			parent.appendChild(wrapper);
+		}
+	}
+
+	const observer = new MutationObserver(ensureSelector);
+	observer.observe(document.documentElement, { childList: true, subtree: true });
+	document.addEventListener('DOMContentLoaded', ensureSelector);
+	ensureSelector();
+})();
+</script>`;
+	const 输出HTML = html.includes('</body>')
+		? html.replace('</body>', 注入脚本 + '</body>')
+		: html + 注入脚本;
+	const headers = new Headers(response.headers);
+	headers.set('Content-Type', 'text/html;charset=utf-8');
+	headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+	headers.delete('Content-Length');
+	return new Response(输出HTML, { status: response.status, statusText: response.statusText, headers });
+}
+
+async function 获取国家反代IP池(源 = 'https://raw.githubusercontent.com/GuardSkill/CFOpt/refs/heads/main/proxyip-best.txt', 每国数量 = 10, 缓存毫秒 = 6 * 60 * 60 * 1000) {
+	const 当前时间 = Date.now();
+	if (缓存国家反代IP池 && 当前时间 - 缓存国家反代IP池时间 < 缓存毫秒) return 缓存国家反代IP池;
+	const 允许国家 = new Set(['AU', 'DE', 'GB', 'HK', 'IE', 'JP', 'KR', 'SG']);
+	const 国家反代IP池 = {};
+	try {
+		const response = await fetch(源, { headers: { 'User-Agent': 'edgetunnel-proxyip-pool/1.0' } });
+		if (!response.ok) throw new Error(`HTTP ${response.status}`);
+		const text = await response.text();
+		for (const 原始行 of text.split(/\r?\n/)) {
+			const 行 = 原始行.trim();
+			if (!行 || 行.startsWith('#') || !行.includes('#')) continue;
+			const [地址部分, 国家部分] = 行.split('#');
+			const 国家 = (国家部分 || '').trim().toUpperCase();
+			const 地址 = (地址部分 || '').trim();
+			if (!地址 || !允许国家.has(国家)) continue;
+			if (!国家反代IP池[国家]) 国家反代IP池[国家] = [];
+			if (国家反代IP池[国家].length >= 每国数量) continue;
+			if (!国家反代IP池[国家].includes(地址)) 国家反代IP池[国家].push(地址);
+		}
+		缓存国家反代IP池 = 国家反代IP池;
+		缓存国家反代IP池时间 = 当前时间;
+		return 国家反代IP池;
+	} catch (error) {
+		console.warn(`[反代IP池] 获取国家反代IP池失败: ${error && error.message ? error.message : error}`);
+		return 缓存国家反代IP池 || {};
+	}
+}
+
+function 提取优选IP备注(原始地址) {
+	const 备注位置 = 原始地址.indexOf('#');
+	return 备注位置 > -1 ? 原始地址.slice(备注位置 + 1).trim() : '';
+}
+
+function 提取优选IP入口国家(原始地址) {
+	const 备注 = 提取优选IP备注(原始地址);
+	const 匹配 = 备注.match(/^([A-Za-z]{2})\s?\[/);
+	return 匹配 ? 匹配[1].toUpperCase() : 'SG';
+}
+
+function 替换优选IP备注(原始地址, 新备注) {
+	const 备注位置 = 原始地址.indexOf('#');
+	const 地址部分 = 备注位置 > -1 ? 原始地址.slice(0, 备注位置) : 原始地址;
+	return `${地址部分}#${新备注}`;
+}
+
+function 生成业务反代优选IP(完整优选IP, 国家反代IP池) {
+	const 业务链路 = [
+		{ 业务: 'PM', 入口国家: 'DE', 反代国家: 'AU', 入口旗帜: '🇩🇪', 反代旗帜: '🇦🇺' },
+		{ 业务: 'PM', 入口国家: 'KR', 反代国家: 'KR', 入口旗帜: '🇰🇷', 反代旗帜: '🇰🇷' },
+		{ 业务: 'PM', 入口国家: 'GB', 反代国家: 'IE', 入口旗帜: '🇬🇧', 反代旗帜: '🇮🇪' },
+		{ 业务: 'OKX', 入口国家: 'HK', 反代国家: 'HK', 入口旗帜: '🇭🇰', 反代旗帜: '🇭🇰' },
+		{ 业务: 'OKX', 入口国家: 'KR', 反代国家: 'KR', 入口旗帜: '🇰🇷', 反代旗帜: '🇰🇷' },
+		{ 业务: 'OKX', 入口国家: 'SG', 反代国家: 'SG', 入口旗帜: '🇸🇬', 反代旗帜: '🇸🇬' },
+		{ 业务: 'CA', 入口国家: 'JP', 反代国家: 'JP', 入口旗帜: '🇯🇵', 反代旗帜: '🇯🇵' },
+		{ 业务: 'CA', 入口国家: 'KR', 反代国家: 'KR', 入口旗帜: '🇰🇷', 反代旗帜: '🇰🇷' },
+		{ 业务: 'CA', 入口国家: 'SG', 反代国家: 'SG', 入口旗帜: '🇸🇬', 反代旗帜: '🇸🇬' },
+	];
+	const 结果 = [];
+	for (const 原始地址 of 完整优选IP) {
+		const 入口国家 = 提取优选IP入口国家(原始地址);
+		const 原备注 = 提取优选IP备注(原始地址) || 原始地址.split('#')[0];
+		for (const 链路 of 业务链路) {
+			if (链路.入口国家 !== 入口国家) continue;
+			const 反代池 = 国家反代IP池[链路.反代国家] || 国家反代IP池.SG || [];
+			if (反代池.length === 0) continue;
+			const 反代参数 = 反代池.join(',');
+			const 新备注 = `${链路.业务} ${链路.入口旗帜} ${链路.入口国家} → ${链路.反代旗帜} ${链路.反代国家} | ${原备注} $proxyip=${反代参数}`;
+			结果.push(替换优选IP备注(原始地址, 新备注));
+		}
+	}
+	return 结果;
 }
 
 async function 请求优选API(urls, 默认端口 = '443', 超时时间 = 3000) {
