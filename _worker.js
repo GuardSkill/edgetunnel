@@ -291,6 +291,8 @@ export default {
 						return new Response(本地优选IP, { status: 200, headers: { 'Content-Type': 'text/plain;charset=utf-8', 'asn': request.cf.asn } });
 					} else if (访问路径 === 'admin/cf.json') {// CF配置文件
 						return new Response(JSON.stringify(request.cf, null, 2), { status: 200, headers: { 'Content-Type': 'application/json;charset=utf-8' } });
+					} else if (访问路径 === 'admin/proxyip-source') {// 读取远程 PROXYIP 来源前 10 个
+						return 获取AdminProxyIP来源(url.searchParams.get('source'));
 					}
 
 					ctx.waitUntil(请求日志记录(env, request, 访问IP, 'Admin_Login', config_JSON));
@@ -5289,35 +5291,12 @@ async function 注入AdminProxyIP选择器(response) {
 	const 注入脚本 = `<script>
 (() => {
 	const sources = [
-		{ label: 'GuardSkill github', url: 'https://raw.githubusercontent.com/GuardSkill/CFOpt/refs/heads/main/proxyip-best.txt' },
-		{ label: 'zip.cm.edu.kg/all.txt', url: 'https://zip.cm.edu.kg/all.txt' },
+		{ label: 'GuardSkill github', source: 'github' },
+		{ label: 'zip.cm.edu.kg/all.txt', source: 'zip' },
 	];
 
-	function parseProxyIPList(text) {
-		return text
-			.split(/\\r?\\n/)
-			.map(line => line.trim())
-			.filter(line => line && !line.startsWith('#'))
-			.map(line => line.split('#')[0].trim())
-			.filter(Boolean)
-			.slice(0, 10)
-			.join(',');
-	}
-
 	function findProxyIPInput() {
-		const labels = Array.from(document.querySelectorAll('label, span, div, p, strong'))
-			.filter(el => el.textContent && el.textContent.trim() === 'PROXYIP');
-		for (const label of labels) {
-			const box = label.closest('div, section, form') || label.parentElement;
-			const input = box && box.querySelector('input:not([type]), input[type="text"], textarea');
-			if (input) return input;
-			const nextInput = label.parentElement && label.parentElement.nextElementSibling
-				? label.parentElement.nextElementSibling.querySelector('input:not([type]), input[type="text"], textarea')
-				: null;
-			if (nextInput) return nextInput;
-		}
-		const inputs = Array.from(document.querySelectorAll('input:not([type]), input[type="text"], textarea'));
-		return inputs.find(input => /(?:^|,)\\d{1,3}(?:\\.\\d{1,3}){3}/.test(input.value || '')) || null;
+		return document.getElementById('proxyIP') || document.querySelector('input[title="PROXYIP"]');
 	}
 
 	function setNativeValue(input, value) {
@@ -5331,14 +5310,16 @@ async function 注入AdminProxyIP选择器(response) {
 	function ensureSelector() {
 		const input = findProxyIPInput();
 		if (!input || document.getElementById('edgetunnel-proxyip-source')) return;
+		const autoProxyGroup = document.getElementById('autoProxy')?.closest('.checkbox-group');
 
 		const wrapper = document.createElement('div');
 		wrapper.id = 'edgetunnel-proxyip-source';
 		wrapper.style.display = 'inline-flex';
 		wrapper.style.alignItems = 'center';
 		wrapper.style.gap = '8px';
-		wrapper.style.marginLeft = '10px';
-		wrapper.style.minWidth = '180px';
+		wrapper.style.marginLeft = autoProxyGroup ? '12px' : '10px';
+		wrapper.style.minWidth = '170px';
+		wrapper.style.flex = '0 0 auto';
 
 		const select = document.createElement('select');
 		select.title = '选择 PROXYIP 来源并填入前 10 个';
@@ -5358,7 +5339,7 @@ async function 注入AdminProxyIP选择器(response) {
 
 		for (const source of sources) {
 			const option = document.createElement('option');
-			option.value = source.url;
+			option.value = source.source;
 			option.textContent = source.label;
 			select.appendChild(option);
 		}
@@ -5374,9 +5355,9 @@ async function 注入AdminProxyIP选择器(response) {
 			status.textContent = '读取中...';
 			select.disabled = true;
 			try {
-				const res = await fetch(select.value, { cache: 'no-store' });
+				const res = await fetch('/admin/proxyip-source?source=' + encodeURIComponent(select.value), { cache: 'no-store' });
 				if (!res.ok) throw new Error('HTTP ' + res.status);
-				const value = parseProxyIPList(await res.text());
+				const value = (await res.text()).trim();
 				if (!value) throw new Error('列表为空');
 				setNativeValue(input, value);
 				status.textContent = '已填入前 10 个';
@@ -5390,11 +5371,12 @@ async function 注入AdminProxyIP选择器(response) {
 		});
 
 		wrapper.append(select, status);
-		const parent = input.parentElement;
+		const parent = autoProxyGroup?.parentElement || input.parentElement;
 		if (parent) {
 			parent.style.display = parent.style.display || 'flex';
 			parent.style.alignItems = parent.style.alignItems || 'center';
-			parent.appendChild(wrapper);
+			if (autoProxyGroup) autoProxyGroup.insertAdjacentElement('afterend', wrapper);
+			else parent.appendChild(wrapper);
 		}
 	}
 
@@ -5412,6 +5394,27 @@ async function 注入AdminProxyIP选择器(response) {
 	headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
 	headers.delete('Content-Length');
 	return new Response(输出HTML, { status: response.status, statusText: response.statusText, headers });
+}
+
+async function 获取AdminProxyIP来源(来源) {
+	const 来源URL = 来源 === 'zip'
+		? 'https://zip.cm.edu.kg/all.txt'
+		: 'https://raw.githubusercontent.com/GuardSkill/CFOpt/refs/heads/main/proxyip-best.txt';
+	try {
+		const response = await fetch(来源URL, { headers: { 'User-Agent': 'edgetunnel-admin-proxyip-source/1.0' } });
+		if (!response.ok) throw new Error(`HTTP ${response.status}`);
+		const 文本 = await response.text();
+		const 前10个 = 文本.split(/\r?\n/)
+			.map(行 => 行.trim())
+			.filter(行 => 行 && !行.startsWith('#'))
+			.map(行 => 行.split('#')[0].trim())
+			.filter(Boolean)
+			.slice(0, 10)
+			.join(',');
+		return new Response(前10个, { status: 200, headers: { 'Content-Type': 'text/plain;charset=utf-8', 'Cache-Control': 'no-store' } });
+	} catch (error) {
+		return new Response(`读取 PROXYIP 来源失败: ${error && error.message ? error.message : error}`, { status: 502, headers: { 'Content-Type': 'text/plain;charset=utf-8', 'Cache-Control': 'no-store' } });
+	}
 }
 
 async function 获取国家反代IP池(源 = 'https://raw.githubusercontent.com/GuardSkill/CFOpt/refs/heads/main/proxyip-best.txt', 每国数量 = 10, 缓存毫秒 = 6 * 60 * 60 * 1000) {
