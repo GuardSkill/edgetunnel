@@ -25,4 +25,5 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: 9429ba5ae2f400a0cfd35eabfebe8f1c
+          wranglerVersion: 4.106.0
           command: pages deploy . --project-name=yuanclash --branch=main
