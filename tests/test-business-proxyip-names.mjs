@@ -21,7 +21,7 @@ const nodes = [
 ];
 const proxyipPool = {
   HK: ['198.51.100.1:443'],
-  LU: ['198.51.100.2:443'],
+  IE: ['198.51.100.2:443'],
 };
 
 const result = context.生成业务反代优选IP(nodes, proxyipPool);
@@ -32,6 +32,6 @@ assert.equal(
 );
 assert.equal(
   result[1],
-  '203.0.113.2:443#🇩🇪 DE → 🇱🇺 LU [北京测速#03 ip.zip] $proxyip=198.51.100.2:443',
+  '203.0.113.2:443#🇩🇪 DE → 🇮🇪 IE [北京测速#03 ip.zip] $proxyip=198.51.100.2:443',
 );
 assert.equal(result.length, 2);
