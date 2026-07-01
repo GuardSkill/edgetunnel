@@ -4182,7 +4182,8 @@ function log(...args) {
 function 规范化Clash业务反代节点名(clash_yaml = '') {
 	return String(clash_yaml)
 		.replace(/🇦🇺 DE → 🇦🇺 AU/g, '🇩🇪 DE → 🇦🇺 AU')
-		.replace(/🇮🇪 DE → 🇮🇪 IE/g, '🇩🇪 DE → 🇮🇪 IE');
+		.replace(/🇮🇪 DE → 🇮🇪 IE/g, '🇩🇪 DE → 🇮🇪 IE')
+		.replace(/🇦🇹 DE → 🇦🇹 AT/g, '🇩🇪 DE → 🇦🇹 AT');
 }
 
 function Clash订阅配置文件热补丁(Clash_原始订阅内容, config_JSON = {}) {
@@ -5560,7 +5561,7 @@ async function 获取国家反代IP池(源 = 'https://raw.githubusercontent.com/
 	const 当前时间 = Date.now();
 	const 缓存键 = `${源}|${每国数量}`;
 	if (缓存国家反代IP池[缓存键] && 当前时间 - (缓存国家反代IP池时间[缓存键] || 0) < 缓存毫秒) return 缓存国家反代IP池[缓存键];
-	const 允许国家 = new Set(['AU', 'DE', 'GB', 'HK', 'IE', 'JP', 'KR', 'SG']);
+	const 允许国家 = new Set(['AT', 'AU', 'DE', 'GB', 'HK', 'IE', 'JP', 'KR', 'SG']);
 	const 国家反代IP池 = {};
 	try {
 		const response = await fetch(源, { headers: { 'User-Agent': 'edgetunnel-proxyip-pool/1.0' } });
@@ -5611,6 +5612,7 @@ function 替换优选IP备注(原始地址, 新备注) {
 function 生成业务反代优选IP(完整优选IP, 国家反代IP池) {
 	const 反代链路 = [
 		{ 入口国家: 'DE', 反代国家: 'IE', 入口旗帜: '🇩🇪', 反代旗帜: '🇮🇪' },
+		{ 入口国家: 'DE', 反代国家: 'AT', 入口旗帜: '🇩🇪', 反代旗帜: '🇦🇹' },
 		{ 入口国家: 'GB', 反代国家: 'IE', 入口旗帜: '🇬🇧', 反代旗帜: '🇮🇪' },
 		{ 入口国家: 'HK', 反代国家: 'HK', 入口旗帜: '🇭🇰', 反代旗帜: '🇭🇰' },
 		{ 入口国家: 'JP', 反代国家: 'JP', 入口旗帜: '🇯🇵', 反代旗帜: '🇯🇵' },
@@ -5621,16 +5623,18 @@ function 生成业务反代优选IP(完整优选IP, 国家反代IP池) {
 	for (const 原始地址 of 完整优选IP) {
 		const 入口国家 = 提取优选IP入口国家(原始地址);
 		const 原备注 = 提取优选IP备注(原始地址) || 原始地址.split('#')[0];
-		const 链路 = 反代链路.find(item => item.入口国家 === 入口国家);
-		if (!链路) continue;
-		const 反代池 = 国家反代IP池[链路.反代国家] || [];
-		if (反代池.length === 0) continue;
-		const 反代参数 = 反代池.join(',');
-		const 测速标签 = 提取优选IP测速标签(原备注);
-		const 新备注 = 链路.入口国家 === 链路.反代国家
-			? `${链路.入口旗帜} ${链路.入口国家} ↪ ${测速标签} $proxyip=${反代参数}`
-			: `${链路.入口旗帜} ${链路.入口国家} → ${链路.反代旗帜} ${链路.反代国家} ${测速标签} $proxyip=${反代参数}`;
-		结果.push(替换优选IP备注(原始地址, 新备注));
+		const 匹配链路 = 反代链路.filter(item => item.入口国家 === 入口国家);
+		if (匹配链路.length === 0) continue;
+		for (const 链路 of 匹配链路) {
+			const 反代池 = 国家反代IP池[链路.反代国家] || [];
+			if (反代池.length === 0) continue;
+			const 反代参数 = 反代池.join(',');
+			const 测速标签 = 提取优选IP测速标签(原备注);
+			const 新备注 = 链路.入口国家 === 链路.反代国家
+				? `${链路.入口旗帜} ${链路.入口国家} ↪ ${测速标签} $proxyip=${反代参数}`
+				: `${链路.入口旗帜} ${链路.入口国家} → ${链路.反代旗帜} ${链路.反代国家} ${测速标签} $proxyip=${反代参数}`;
+			结果.push(替换优选IP备注(原始地址, 新备注));
+		}
 	}
 	return 结果;
 }
