@@ -4179,6 +4179,10 @@ function log(...args) {
 	if (调试日志打印) console.log(...args);
 }
 
+function 规范化Clash业务反代节点名(clash_yaml = '') {
+	return String(clash_yaml).replace(/🇦🇺 DE → 🇦🇺 AU/g, '🇩🇪 DE → 🇦🇺 AU');
+}
+
 function Clash订阅配置文件热补丁(Clash_原始订阅内容, config_JSON = {}) {
 	const uuid = config_JSON?.UUID || null;
 	const ECH启用 = Boolean(config_JSON?.ECH);
@@ -4189,7 +4193,7 @@ function Clash订阅配置文件热补丁(Clash_原始订阅内容, config_JSON 
 	const gRPCUserAgent = (typeof config_JSON?.gRPCUserAgent === 'string' && config_JSON.gRPCUserAgent.trim()) ? config_JSON.gRPCUserAgent.trim() : null;
 	const 需要处理gRPC = config_JSON?.传输协议 === "grpc" && Boolean(gRPCUserAgent);
 	const gRPCUserAgentYAML = gRPCUserAgent ? JSON.stringify(gRPCUserAgent) : null;
-	let clash_yaml = Clash_原始订阅内容.replace(/mode:\s*Rule\b/g, 'mode: rule');
+
 
 	const baseDnsBlock = `dns:
   enable: true
