@@ -4193,7 +4193,7 @@ function Clash订阅配置文件热补丁(Clash_原始订阅内容, config_JSON 
 	const gRPCUserAgent = (typeof config_JSON?.gRPCUserAgent === 'string' && config_JSON.gRPCUserAgent.trim()) ? config_JSON.gRPCUserAgent.trim() : null;
 	const 需要处理gRPC = config_JSON?.传输协议 === "grpc" && Boolean(gRPCUserAgent);
 	const gRPCUserAgentYAML = gRPCUserAgent ? JSON.stringify(gRPCUserAgent) : null;
-
+	let clash_yaml = 规范化Clash业务反代节点名(Clash_原始订阅内容).replace(/mode:\s*Rule\b/g, 'mode: rule');
 
 	const baseDnsBlock = `dns:
   enable: true
