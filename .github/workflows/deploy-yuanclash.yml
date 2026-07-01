@@ -1,0 +1,27 @@
+name: Deploy yuanclash
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "_worker.js"
+      - "wrangler.toml"
+      - ".github/workflows/deploy-yuanclash.yml"
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy Cloudflare Worker
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Deploy yuanclash
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          command: deploy
