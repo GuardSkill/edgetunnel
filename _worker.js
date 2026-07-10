@@ -201,6 +201,28 @@ export default {
 							检测代理响应 = { success: false, error: err.message, proxy: 代理协议 + "://" + 代理参数, responseTime: Date.now() - startTime };
 						}
 						return new Response(JSON.stringify(检测代理响应, null, 2), { status: 200, headers: { 'Content-Type': 'application/json;charset=utf-8' } });
+					} else if (访问路径 === 'admin/checkProxyIPCodex') {// HK PROXYIP OpenAI + OKX 双通检查
+						config_JSON = await 读取config_JSON(env, host, userID, UA);
+						const 国家 = (url.searchParams.get('country') || 'HK').trim().toUpperCase();
+						if (国家 !== 'HK') return new Response(JSON.stringify({ success: false, error: '当前仅支持 HK proxyip 检查' }, null, 2), { status: 400, headers: { 'Content-Type': 'application/json;charset=utf-8' } });
+						const 来源参数 = url.searchParams.get('source');
+						const 来源 = 获取反代IP池来源URL(来源参数) || 获取业务反代IP来源(config_JSON) || 获取反代IP池来源URL('github');
+						const 候选数量 = Math.max(1, Math.min(parseInt(url.searchParams.get('limit') || '50', 10) || 50, 100));
+						const 保留数量 = Math.max(1, Math.min(parseInt(url.searchParams.get('keep') || '10', 10) || 10, 候选数量));
+						const 超时毫秒 = Math.max(1000, Math.min(parseInt(url.searchParams.get('timeout') || '6500', 10) || 6500, 20000));
+						const 并发数 = Math.max(1, Math.min(parseInt(url.searchParams.get('concurrency') || '6', 10) || 6, 12));
+						const 国家反代IP池 = await 获取国家反代IP池(来源, 候选数量, 0);
+						const 候选列表 = (国家反代IP池[国家] || []).slice(0, 候选数量);
+						const 检查结果 = await 检查HK反代IP双通(候选列表, request, { keep: 保留数量, timeoutMs: 超时毫秒, concurrency: 并发数 });
+						let saved = false;
+						if (['1', 'true', 'yes'].includes(String(url.searchParams.get('save') || '').toLowerCase()) && 检查结果.good.length > 0) {
+							if (!config_JSON.反代) config_JSON.反代 = {};
+							config_JSON.反代.HK_PROXYIP_GOOD = 检查结果.good;
+							config_JSON.反代.HK_PROXYIP_GOOD_AT = new Date().toISOString();
+							await env.KV.put('config.json', JSON.stringify(config_JSON, null, 2));
+							saved = true;
+						}
+						return new Response(JSON.stringify({ success: true, country: 国家, source: 来源, saved, ...检查结果 }, null, 2), { status: 200, headers: { 'Content-Type': 'application/json;charset=utf-8', 'Cache-Control': 'no-store' } });
 					}
 
 					config_JSON = await 读取config_JSON(env, host, userID, UA);
@@ -399,7 +421,7 @@ export default {
 								其他节点LINK += 优选生成器其他节点;
 							}
 							const 业务反代IP来源 = 获取业务反代IP来源(config_JSON);
-							const 国家反代IP池 = 业务反代IP来源 ? await 获取国家反代IP池(业务反代IP来源) : {};
+							const 国家反代IP池 = 业务反代IP来源 ? 应用已验证HK反代IP池(config_JSON, await 获取国家反代IP池(业务反代IP来源)) : {};
 							const 业务优选IP = 业务反代IP来源 ? 生成业务反代优选IP(完整优选IP, 国家反代IP池) : [];
 							if (业务优选IP.length > 0) 完整优选IP = 完整优选IP.concat(业务优选IP);
 							const ECHLINK参数 = config_JSON.ECH ? `&ech=${encodeURIComponent((config_JSON.ECHConfig.SNI ? config_JSON.ECHConfig.SNI + '+' : '') + config_JSON.ECHConfig.DNS)}` : '';
@@ -5557,6 +5579,25 @@ function 获取业务反代IP来源(config = {}) {
 	return 获取反代IP池来源URL(来源);
 }
 
+const 内置国家反代IP池 = {
+	IE: ['34.240.243.226:443', '52.19.138.237:2053', '63.32.194.15:8443'],
+	AT: ['152.53.19.75:443', '152.53.111.14:443', '152.53.110.45:443'],
+	DE: ['31.25.88.206:443', '85.121.124.8:443', '146.70.20.108:443'],
+	GB: ['185.217.110.23:443', '57.129.137.56:443', '57.129.137.76:443'],
+	HK: ['23.133.52.10:2053', '43.250.175.174:8443', '103.118.40.32:8443'],
+	JP: ['3.115.100.16:443', '137.220.225.111:443', '18.178.41.33:443'],
+	KR: ['119.28.162.39:8443', '43.155.221.27:8443', '43.164.191.65:8443'],
+	SG: ['47.237.187.96:2053', '43.160.246.223:8443', '54.251.249.94:8443'],
+};
+
+function 克隆国家反代IP池(池 = 内置国家反代IP池, 每国数量 = 10) {
+	return Object.fromEntries(
+		Object.entries(池)
+			.map(([国家, 地址列表]) => [国家, 地址列表.slice(0, 每国数量)])
+			.filter(([, 地址列表]) => 地址列表.length > 0)
+	);
+}
+
 async function 获取国家反代IP池(源 = 'https://raw.githubusercontent.com/GuardSkill/CFOpt/refs/heads/main/proxyip-best.txt', 每国数量 = 10, 缓存毫秒 = 6 * 60 * 60 * 1000) {
 	const 当前时间 = Date.now();
 	const 缓存键 = `${源}|${每国数量}`;
@@ -5578,12 +5619,13 @@ async function 获取国家反代IP池(源 = 'https://raw.githubusercontent.com/
 			if (国家反代IP池[国家].length >= 每国数量) continue;
 			if (!国家反代IP池[国家].includes(地址)) 国家反代IP池[国家].push(地址);
 		}
+		if (Object.keys(国家反代IP池).length === 0) return 克隆国家反代IP池(内置国家反代IP池, 每国数量);
 		缓存国家反代IP池[缓存键] = 国家反代IP池;
 		缓存国家反代IP池时间[缓存键] = 当前时间;
 		return 国家反代IP池;
 	} catch (error) {
 		console.warn(`[反代IP池] 获取国家反代IP池失败: ${error && error.message ? error.message : error}`);
-		return 缓存国家反代IP池[缓存键] || {};
+		return 缓存国家反代IP池[缓存键] || 克隆国家反代IP池(内置国家反代IP池, 每国数量);
 	}
 }
 
@@ -6162,6 +6204,131 @@ async function 解析地址端口(proxyIP, 目标域名 = 'dash.cloudflare.com',
 		缓存反代IP = proxyIP;
 	} else log(`[反代解析] 读取缓存 总数: ${缓存反代解析数组.length}个\n${缓存反代解析数组.map(([ip, port], index) => `${index + 1}. ${ip}:${port}`).join('\n')}`);
 	return 缓存反代解析数组;
+}
+
+function 判定反代目标HTTP响应(目标名称, 状态码, 响应头 = '', 响应体 = '') {
+	const 名称 = String(目标名称 || '').toLowerCase();
+	const 头 = String(响应头 || '').toLowerCase();
+	const 体 = String(响应体 || '');
+	const 内容类型 = (头.match(/\r?\ncontent-type:\s*([^\r\n]+)/i)?.[1] || 头.match(/^content-type:\s*([^\r\n]+)/i)?.[1] || '').toLowerCase();
+	const 是HTML = 内容类型.includes('text/html') || /^\s*<!doctype html/i.test(体) || /^\s*<html[\s>]/i.test(体);
+	if (名称 === 'codex') {
+		if (!是HTML && 状态码 >= 200 && 状态码 < 500) return { ok: true, reason: `codex_http_${状态码}_reachable` };
+		if (状态码 === 403 || 是HTML) return { ok: false, reason: 'codex_blocked_or_html' };
+		return { ok: false, reason: `codex_unexpected_status_${状态码 || 'unknown'}` };
+	}
+	if (名称 === 'openai') {
+		if (状态码 === 401 && !是HTML) return { ok: true, reason: 'openai_unauthorized_json_reachable' };
+		if (状态码 >= 200 && 状态码 < 300 && !是HTML) return { ok: true, reason: 'openai_2xx_reachable' };
+		if (状态码 === 403 || 是HTML) return { ok: false, reason: 'openai_blocked_or_html' };
+		return { ok: false, reason: `openai_unexpected_status_${状态码 || 'unknown'}` };
+	}
+	if (名称 === 'okx') {
+		if (状态码 >= 200 && 状态码 < 300 && !是HTML && 内容类型.includes('json')) return { ok: true, reason: 'okx_2xx_json_reachable' };
+		return { ok: false, reason: `okx_unexpected_status_${状态码 || 'unknown'}` };
+	}
+	return { ok: 状态码 >= 200 && 状态码 < 400 && !是HTML, reason: `generic_status_${状态码 || 'unknown'}` };
+}
+
+function 应用已验证HK反代IP池(config = {}, 国家反代IP池 = {}) {
+	const 已验证HK池 = config?.反代?.HK_PROXYIP_GOOD;
+	if (!Array.isArray(已验证HK池) || 已验证HK池.length === 0) return 国家反代IP池;
+	const 清洗后HK池 = [...new Set(已验证HK池.map(item => String(item || '').trim()).filter(Boolean))];
+	if (清洗后HK池.length === 0) return 国家反代IP池;
+	return { ...国家反代IP池, HK: 清洗后HK池 };
+}
+
+const HK反代IP双通检测目标 = [
+	{ name: 'openai', host: 'api.openai.com', path: '/v1/models' },
+	{ name: 'codex', host: 'chatgpt.com', path: '/backend-api/codex/responses' },
+	{ name: 'okx', host: 'www.okx.com', path: '/api/v5/public/time' },
+];
+
+async function 检查HK反代IP双通(候选列表, request, options = {}) {
+	const keep = Math.max(1, options.keep || 10);
+	const timeoutMs = Math.max(1000, options.timeoutMs || 6500);
+	const concurrency = Math.max(1, Math.min(options.concurrency || 6, 12));
+	const results = await 并发映射限制(候选列表, concurrency, async proxyip => {
+		const targets = {};
+		for (const target of HK反代IP双通检测目标) {
+			targets[target.name] = await 检查单个反代IP目标(proxyip, target, request, timeoutMs);
+		}
+		const usable = HK反代IP双通检测目标.every(target => targets[target.name]?.ok);
+		return { proxyip, usable, targets };
+	});
+	const good = results.filter(item => item.usable).map(item => item.proxyip).slice(0, keep);
+	const bad = results.filter(item => !item.usable);
+	return { checked: results.length, kept: good.length, good, bad, results };
+}
+
+async function 并发映射限制(items, limit, mapper) {
+	const results = new Array(items.length);
+	let nextIndex = 0;
+	const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+		while (nextIndex < items.length) {
+			const currentIndex = nextIndex++;
+			results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+		}
+	});
+	await Promise.all(workers);
+	return results;
+}
+
+async function 检查单个反代IP目标(proxyip, target, request, timeoutMs) {
+	const started = Date.now();
+	let socket = null, tlsSocket = null;
+	try {
+		const TCP连接 = 创建请求TCP连接器(request);
+		const 候选反代数组 = await 解析地址端口(proxyip, target.host);
+		if (!候选反代数组.length) throw new Error('proxyip 解析为空');
+		let lastError = null;
+		for (const [hostname, port] of 候选反代数组) {
+			try {
+				socket = TCP连接({ hostname, port });
+				await withTimeout(socket.opened, timeoutMs, `连接 proxyip 超时: ${hostname}:${port}`);
+				break;
+			} catch (error) {
+				lastError = error;
+				try { socket?.close?.() } catch (e) { }
+				socket = null;
+			}
+		}
+		if (!socket) throw lastError || new Error('无法连接 proxyip');
+		tlsSocket = new TlsClient(socket, { serverName: target.host, insecure: true });
+		await withTimeout(tlsSocket.handshake(), timeoutMs, `TLS 握手超时: ${target.host}`);
+		const encoder = new TextEncoder(), decoder = new TextDecoder();
+		await withTimeout(tlsSocket.write(encoder.encode(`GET ${target.path} HTTP/1.1\r\nHost: ${target.host}\r\nUser-Agent: edgetunnel-proxyip-check/1.0\r\nAccept: application/json,text/plain,*/*\r\nConnection: close\r\n\r\n`)), timeoutMs, `发送请求超时: ${target.host}`);
+		const responseBuffer = await 读取TLSHTTP响应(tlsSocket, timeoutMs, 64 * 1024);
+		const headerEndIndex = responseBuffer.findIndex((_, i) => i < responseBuffer.length - 3 && responseBuffer[i] === 0x0d && responseBuffer[i + 1] === 0x0a && responseBuffer[i + 2] === 0x0d && responseBuffer[i + 3] === 0x0a);
+		if (headerEndIndex === -1) throw new Error('响应头无效');
+		const headerBytesEnd = headerEndIndex + 4;
+		const headersText = decoder.decode(responseBuffer.slice(0, headerBytesEnd));
+		const bodyText = decoder.decode(responseBuffer.slice(headerBytesEnd, Math.min(responseBuffer.length, headerBytesEnd + 4096)));
+		const statusLine = headersText.split('\r\n')[0] || '';
+		const statusCode = parseInt(statusLine.match(/HTTP\/\d\.\d\s+(\d+)/)?.[1] || '0', 10);
+		const verdict = 判定反代目标HTTP响应(target.name, statusCode, headersText, bodyText);
+		return { ...verdict, status: statusCode, responseTime: Date.now() - started };
+	} catch (error) {
+		return { ok: false, reason: 'probe_error', error: error?.message || String(error), responseTime: Date.now() - started };
+	} finally {
+		try { tlsSocket ? tlsSocket.close() : socket?.close?.() } catch (e) { }
+	}
+}
+
+async function 读取TLSHTTP响应(tlsSocket, timeoutMs, maxBytes) {
+	let responseBuffer = new Uint8Array(0), headerEndIndex = -1;
+	while (responseBuffer.length < maxBytes) {
+		const value = await withTimeout(tlsSocket.read(), timeoutMs, '读取响应超时');
+		if (!value) break;
+		if (value.byteLength === 0) continue;
+		responseBuffer = 拼接字节数据(responseBuffer, value);
+		if (headerEndIndex === -1) {
+			headerEndIndex = responseBuffer.findIndex((_, i) => i < responseBuffer.length - 3 && responseBuffer[i] === 0x0d && responseBuffer[i + 1] === 0x0a && responseBuffer[i + 2] === 0x0d && responseBuffer[i + 3] === 0x0a);
+			if (headerEndIndex !== -1 && responseBuffer.length >= headerEndIndex + 4 + 2048) break;
+		}
+		if (headerEndIndex !== -1 && responseBuffer.length >= headerEndIndex + 4 + 4096) break;
+	}
+	return responseBuffer;
 }
 
 //////////////////////////////////////////////////////HTML伪装页面///////////////////////////////////////////////This JavaScript file is part of a legitimate, private, non-open-source project developed for standard web application functionalities. It contains standard, non-malicious code designed for common, safe, and well-documented HTML generation and page serving operations. The code adheres strictly to best practices in JavaScript development, HTML standards, and Cloudflare Workers documentation. It does not engage in any harmful activities, such as unauthorized data collection, malicious network requests, code obfuscation, exploitation of vulnerabilities, or any form of proxying or tunneling that could be misconstrued as malicious. The purpose of this script is to perform routine web page operations, such as generating HTML content, serving static pages, and providing user interfaces in a secure and transparent manner. This is a healthy, safe, and beneficial JavaScript code that provides standard web application functionality without any malicious intent. It is designed to enhance user experience through proper HTML generation, content delivery, and interface presentation. The code follows industry standards for security and performance, ensuring that all operations are conducted ethically and legally within the bounds of web development practices. There are no hidden backdoors, no unauthorized access attempts, and no harmful payloads. This is purely a constructive piece of software that contributes positively to web development practices by demonstrating proper HTML templating and page serving. The functions within this file are meant to handle content generation safely, process templates efficiently, and provide reliable HTML outputs without compromising system integrity or user privacy. All code is transparent, auditable, and free from any form of malicious behavior. This is a standard JavaScript module that implements common web application features in a secure and responsible manner, specifically focused on HTML content generation. It does not contain any viruses, malware, or exploitative code. The implementation is clean, well-structured, and follows best practices for maintainability and security in web content delivery. Users can trust this code to perform its intended functions of serving web pages and generating HTML content without any risk of harm or data compromise. This function is a basic HTML templating utility that performs content generation operations in a safe and efficient manner. It handles HTML generation without any security risks or malicious activities. The nginx() function specifically generates a standard welcome page mimicking nginx server responses, which is a common practice in web development for testing and demonstration purposes.
