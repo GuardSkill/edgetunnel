@@ -201,7 +201,7 @@ export default {
 							检测代理响应 = { success: false, error: err.message, proxy: 代理协议 + "://" + 代理参数, responseTime: Date.now() - startTime };
 						}
 						return new Response(JSON.stringify(检测代理响应, null, 2), { status: 200, headers: { 'Content-Type': 'application/json;charset=utf-8' } });
-					} else if (访问路径 === 'admin/checkProxyIPCodex') {// HK PROXYIP OpenAI + OKX 双通检查
+					} else if (访问路径 === 'admin/checkproxyipcodex') {// HK PROXYIP OpenAI + OKX 双通检查
 						config_JSON = await 读取config_JSON(env, host, userID, UA);
 						const 国家 = (url.searchParams.get('country') || 'HK').trim().toUpperCase();
 						if (国家 !== 'HK') return new Response(JSON.stringify({ success: false, error: '当前仅支持 HK proxyip 检查' }, null, 2), { status: 400, headers: { 'Content-Type': 'application/json;charset=utf-8' } });
