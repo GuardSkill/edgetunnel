@@ -487,11 +487,10 @@ export default {
 						} else { // 订阅转换
 							const 订阅转换URL = `${config_JSON.订阅转换配置.SUBAPI}/sub?target=${订阅类型}&url=${encodeURIComponent(url.protocol + '//' + url.host + '/sub?target=mixed&token=' + 今日订阅转换后端专属TOKEN + '&cnIspCode=' + 识别运营商(request) + (url.searchParams.has('sub') && url.searchParams.get('sub') != '' ? `&sub=${url.searchParams.get('sub')}` : ''))}&config=${encodeURIComponent(config_JSON.订阅转换配置.SUBCONFIG)}&emoji=${config_JSON.订阅转换配置.SUBEMOJI}&list=${config_JSON.订阅转换配置.SUBLIST}&scv=${config_JSON.跳过证书验证}`;
 							try {
-								const response = await fetch(订阅转换URL, { headers: { 'User-Agent': 'Subconverter for ' + 订阅类型 + ' edge' + 'tunnel (https://github.com/' + 特征码字典[1] + '/edge' + 'tunnel)' } });
-								if (response.ok) {
-									订阅内容 = await response.text();
-									if (url.searchParams.has('surge') || ua.includes('surge')) 订阅内容 = Surge订阅配置文件热补丁(订阅内容, url.protocol + '//' + url.host + '/sub?token=' + 订阅TOKEN + '&surge', config_JSON);
-								} else return new Response('订阅转换后端异常：' + response.statusText, { status: response.status });
+								const 订阅转换缓存键 = 'subconverter-cache:' + await MD5MD5([host, userID, 订阅类型, config_JSON.订阅转换配置.SUBAPI, config_JSON.订阅转换配置.SUBCONFIG, config_JSON.订阅转换配置.SUBEMOJI, config_JSON.订阅转换配置.SUBLIST, config_JSON.跳过证书验证, 识别运营商(request), url.searchParams.get('sub') || ''].join('|'));
+								const 订阅转换结果 = await 获取订阅转换内容(订阅转换URL, env, 订阅转换缓存键, { 'User-Agent': 'Subconverter for ' + 订阅类型 + ' edge' + 'tunnel (https://github.com/' + 特征码字典[1] + '/edge' + 'tunnel)' });
+								订阅内容 = 订阅转换结果.text;
+								if (url.searchParams.has('surge') || ua.includes('surge')) 订阅内容 = Surge订阅配置文件热补丁(订阅内容, url.protocol + '//' + url.host + '/sub?token=' + 订阅TOKEN + '&surge', config_JSON);
 							} catch (error) {
 								return new Response('订阅转换后端异常：' + error.message, { status: 403 });
 							}
@@ -4722,6 +4721,39 @@ function Surge订阅配置文件热补丁(content, url, config_JSON) {
 
 	输出内容 = `#!MANAGED-CONFIG ${url} interval=${config_JSON.优选订阅生成.SUBUpdateTime * 60 * 60} strict=false` + 输出内容.substring(输出内容.indexOf('\n'));
 	return 输出内容;
+}
+
+async function 获取订阅转换内容(订阅转换URL, env, 缓存键, headers = {}, options = {}) {
+	const retries = Math.max(1, options.retries || 3);
+	const retryDelayMs = Math.max(0, options.retryDelayMs ?? 350);
+	let lastError = null;
+	for (let attempt = 1; attempt <= retries; attempt++) {
+		try {
+			const response = await fetch(订阅转换URL, { headers });
+			if (!response.ok) throw new Error('订阅转换后端异常：' + (response.statusText || `HTTP ${response.status}`));
+			const text = await response.text();
+			if (env?.KV?.put && 缓存键 && text) {
+				await env.KV.put(缓存键, JSON.stringify({ updatedAt: new Date().toISOString(), content: text }));
+			}
+			return { text, fromCache: false, attempts: attempt };
+		} catch (error) {
+			lastError = error;
+			if (attempt < retries && retryDelayMs > 0) await new Promise(resolve => setTimeout(resolve, retryDelayMs * attempt));
+		}
+	}
+
+	if (env?.KV?.get && 缓存键) {
+		try {
+			const cachedText = await env.KV.get(缓存键);
+			if (cachedText) {
+				const cached = JSON.parse(cachedText);
+				if (cached?.content) return { text: cached.content, fromCache: true, updatedAt: cached.updatedAt, error: lastError?.message || String(lastError) };
+			}
+		} catch (cacheError) {
+			console.warn(`[订阅转换缓存] 读取缓存失败: ${cacheError?.message || cacheError}`);
+		}
+	}
+	throw lastError || new Error('订阅转换后端异常');
 }
 
 async function 请求日志记录(env, request, 访问IP, 请求类型 = "Get_SUB", config_JSON, 是否写入KV日志 = true) {
