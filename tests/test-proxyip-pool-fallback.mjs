@@ -25,9 +25,11 @@ globalThis.获取国家反代IP池 = 获取国家反代IP池;`, failedFetchConte
 
 const failedFetchResult = await failedFetchContext.获取国家反代IP池('https://example.invalid/proxyip-best.txt');
 
-assert.deepEqual(Object.keys(failedFetchResult).sort(), ['AT', 'DE', 'GB', 'HK', 'IE', 'JP', 'KR', 'SG']);
+assert.deepEqual(Object.keys(failedFetchResult).sort(), ['AT', 'DE', 'GB', 'HK', 'IE', 'JP', 'KR', 'SG', 'TW', 'US']);
 assert.equal(failedFetchResult.JP.length > 0, true);
 assert.equal(failedFetchResult.SG.length > 0, true);
+assert.equal(failedFetchResult.TW.length > 0, true);
+assert.equal(failedFetchResult.US.length > 0, true);
 
 const emptySourceContext = {
   Date,
@@ -46,3 +48,22 @@ globalThis.获取国家反代IP池 = 获取国家反代IP池;`, emptySourceConte
 const emptySourceResult = await emptySourceContext.获取国家反代IP池('https://example.invalid/empty.txt');
 
 assert.equal(emptySourceResult.JP.length > 0, true);
+
+const remoteSourceContext = {
+  Date,
+  Set,
+  console: { warn() {} },
+  fetch: async () => ({
+    ok: true,
+    text: async () => '198.51.100.10:443#TW\n198.51.100.11:8443#US\n',
+  }),
+};
+vm.createContext(remoteSourceContext);
+vm.runInContext(`let 缓存国家反代IP池 = {}, 缓存国家反代IP池时间 = {};
+${workerSource.slice(start, end)}
+globalThis.获取国家反代IP池 = 获取国家反代IP池;`, remoteSourceContext);
+
+const remoteSourceResult = await remoteSourceContext.获取国家反代IP池('https://example.test/proxyip-best.txt');
+
+assert.deepEqual(JSON.parse(JSON.stringify(remoteSourceResult.TW)), ['198.51.100.10:443']);
+assert.deepEqual(JSON.parse(JSON.stringify(remoteSourceResult.US)), ['198.51.100.11:8443']);

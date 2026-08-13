@@ -18,11 +18,15 @@ globalThis.生成业务反代优选IP = 生成业务反代优选IP;`, context);
 const nodes = [
   '203.0.113.1:443#🇭🇰 HK [北京测速#17 ip.zip]',
   '203.0.113.2:443#🇩🇪 DE [北京测速#03 ip.zip]',
+  '203.0.113.3:443#🇹🇼 TW [台北测速#01 ip.zip]',
+  '203.0.113.4:443#US [洛杉矶测速#02 ip.zip]',
 ];
 const proxyipPool = {
   HK: ['198.51.100.1:443'],
   IE: ['198.51.100.2:443'],
   AT: ['198.51.100.3:443'],
+  TW: ['198.51.100.4:443'],
+  US: ['198.51.100.5:443'],
 };
 
 const result = context.生成业务反代优选IP(nodes, proxyipPool);
@@ -39,4 +43,12 @@ assert.equal(
   result[2],
   '203.0.113.2:443#🇩🇪 DE → 🇦🇹 AT [北京测速#03 ip.zip] $proxyip=198.51.100.3:443',
 );
-assert.equal(result.length, 3);
+assert.equal(
+  result[3],
+  '203.0.113.3:443#🇹🇼 TW ↪ [台北测速#01 ip.zip] $proxyip=198.51.100.4:443',
+);
+assert.equal(
+  result[4],
+  '203.0.113.4:443#🇺🇸 US ↪ [洛杉矶测速#02 ip.zip] $proxyip=198.51.100.5:443',
+);
+assert.equal(result.length, 5);
