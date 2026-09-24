@@ -3,7 +3,7 @@ let config_JSON, 反代IP = '', 启用SOCKS5反代 = null, 启用SOCKS5全局反
 let 缓存SOCKS5白名单 = null, 缓存反代IP, 缓存反代解析数组, 缓存反代数组索引 = 0, 启用反代兜底 = true, 调试日志打印 = false;
 let 缓存国家反代IP池 = {}, 缓存国家反代IP池时间 = {};
 let SOCKS5白名单 = ['*tapecontent.net', '*cloudatacdn.com', '*loadshare.org', '*cdn-centaurus.com', 'scholar.google.com'];
-const Pages静态页面 = 'https://edt-pages.github.io';
+const Pages静态页面 = 'https://edt-pages.github.io', EDT_版本号 = Number(String(Version).replace(/\D+/g, ''));
 ///////////////////////////////////////////////////////全局常量和工具函数///////////////////////////////////////////////
 const WS早期数据最大字节 = 8 * 1024, WS早期数据最大头长度 = Math.ceil(WS早期数据最大字节 * 4 / 3) + 4;
 const 上行合包目标字节 = 20 * 1024, 上行队列最大字节 = 16 * 1024 * 1024, 上行队列最大条目 = 4096;
@@ -65,7 +65,7 @@ export default {
 					const 目标码 = 目标UUID.charCodeAt(i);
 					目标前8总和 += 目标码 <= 57 ? 目标码 - 48 : 目标码 - 87;
 				}
-				if (请求前8总和 === 目标前8总和 && 请求UUID.slice(-12) === 目标UUID.slice(-12)) return new Response(JSON.stringify({ Version: Number(String(Version).replace(/\D+/g, '')) }), { status: 200, headers: { 'Content-Type': 'application/json;charset=utf-8' } });
+				if (请求前8总和 === 目标前8总和 && 请求UUID.slice(-12) === 目标UUID.slice(-12)) return new Response(JSON.stringify({ Version: EDT_版本号 }), { status: 200, headers: { 'Content-Type': 'application/json;charset=utf-8' } });
 			}
 		} else if (管理员密码 && upgradeHeader === 'websocket') {// WebSocket代理
 			await 反代参数获取(url, userID);
@@ -491,7 +491,7 @@ export default {
 							const 订阅转换URL = `${config_JSON.订阅转换配置.SUBAPI}/sub?target=${订阅类型}&url=${encodeURIComponent(url.protocol + '//' + url.host + '/sub?target=mixed&token=' + 今日订阅转换后端专属TOKEN + '&cnIspCode=' + 识别运营商(request) + (url.searchParams.has('sub') && url.searchParams.get('sub') != '' ? `&sub=${url.searchParams.get('sub')}` : ''))}&config=${encodeURIComponent(config_JSON.订阅转换配置.SUBCONFIG)}&emoji=${config_JSON.订阅转换配置.SUBEMOJI}&list=${config_JSON.订阅转换配置.SUBLIST}&scv=${config_JSON.跳过证书验证}&xudp=${config_JSON.订阅转换配置.XUDP}&udp=${config_JSON.订阅转换配置.UDP}&tls13=${config_JSON.订阅转换配置.TLS13}&append_type=${config_JSON.订阅转换配置.APPEND_TYPE}&sort=${config_JSON.订阅转换配置.SORT}&expand=${config_JSON.订阅转换配置.EXPAND}`;
 							try {
 								const 订阅转换缓存键 = 'subconverter-cache:' + await MD5MD5([host, userID, 订阅类型, config_JSON.订阅转换配置.SUBAPI, config_JSON.订阅转换配置.SUBCONFIG, config_JSON.订阅转换配置.SUBEMOJI, config_JSON.订阅转换配置.SUBLIST, config_JSON.跳过证书验证, config_JSON.订阅转换配置.XUDP, config_JSON.订阅转换配置.UDP, config_JSON.订阅转换配置.TLS13, config_JSON.订阅转换配置.APPEND_TYPE, config_JSON.订阅转换配置.SORT, config_JSON.订阅转换配置.EXPAND, 识别运营商(request), url.searchParams.get('sub') || ''].join('|'));
-								const 订阅转换结果 = await 获取订阅转换内容(订阅转换URL, env, 订阅转换缓存键, { 'User-Agent': 'Subconverter for ' + 订阅类型 + ' edge' + 'tunnel (https://github.com/' + 特征码字典[1] + '/edge' + 'tunnel) Uid/0x' + 本机标识头 });
+								const 订阅转换结果 = await 获取订阅转换内容(订阅转换URL, env, 订阅转换缓存键, { 'User-Agent': 'Subconverter for ' + 订阅类型 + ' edge' + 'tunnel (https://github.com/' + 特征码字典[1] + '/edge' + 'tunnel) Uid/0x' + 本机标识头 + ' Version/' + EDT_版本号 });
 								订阅内容 = 订阅转换结果.text;
 								if (url.searchParams.has('surge') || ua.includes('surge')) 订阅内容 = Surge订阅配置文件热补丁(订阅内容, url.protocol + '//' + url.host + '/sub?token=' + 订阅TOKEN + '&surge', config_JSON);
 							} catch (error) {
@@ -5888,7 +5888,7 @@ async function 获取优选订阅生成器数据(优选订阅生成器HOST, uid 
 
 	try {
 		const response = await fetch(优选订阅生成器URL, {
-			headers: { 'User-Agent': 汇聚订阅_UA + ' Uid/0x' + uid }
+			headers: { 'User-Agent': 汇聚订阅_UA + ' Uid/0x' + uid + ' Version/' + EDT_版本号 }
 		});
 
 		if (!response.ok) {
@@ -6337,7 +6337,7 @@ async function 请求优选API(urls, 默认端口 = '443', uid = "000000", 超�
 		try {
 			const controller = new AbortController();
 			const timeoutId = setTimeout(() => controller.abort(), 超时时间);
-			const response = await fetch(urlWithoutHash, { signal: controller.signal, headers: { 'User-Agent': 汇聚订阅_UA + ' Uid/0x' + uid } });
+			const response = await fetch(urlWithoutHash, { signal: controller.signal, headers: { 'User-Agent': 汇聚订阅_UA + ' Uid/0x' + uid + ' Version/' + EDT_版本号 } });
 			clearTimeout(timeoutId);
 			let text = '';
 			try {
