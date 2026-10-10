@@ -4,9 +4,10 @@ import fs from 'node:fs';
 const workerPath = new URL('../_worker.js', import.meta.url);
 const workerSource = fs.readFileSync(workerPath, 'utf8');
 
+assert.equal(workerSource.includes('Tanach with Nikkud'), false, 'unrelated Tanakh payload must not be bundled');
 assert.match(workerSource, /const 汇聚订阅_UA = 'v2rayN\/edge'/);
-assert.match(workerSource, /headers: \{ 'User-Agent': 汇聚订阅_UA \}/);
-assert.match(workerSource, /signal: controller\.signal, headers: \{ 'User-Agent': 汇聚订阅_UA \}/);
+assert.match(workerSource, /headers: \{ 'User-Agent': 汇聚订阅_UA \+ ' Uid\/0x' \+ uid \+ ' Version\/' \+ EDT_版本号 \}/);
+assert.match(workerSource, /signal: controller\.signal, headers: \{ 'User-Agent': 汇聚订阅_UA \+ ' Uid\/0x' \+ uid \+ ' Version\/' \+ EDT_版本号 \}/);
 
 assert.match(workerSource, /EXPAND: true, \/\/ 展开规则全文/);
 assert.match(workerSource, /typeof config_JSON\.订阅转换配置\.EXPAND !== 'boolean'/);
