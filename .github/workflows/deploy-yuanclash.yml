@@ -1,29 +1,76 @@
-name: Deploy yuanclash
+name: Deploy Cloudflare Pages
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
-      - "_worker.js"
-      - "wrangler.toml"
-      - ".github/workflows/deploy-yuanclash.yml"
+      - _worker.js
+      - .github/workflows/deploy-yuanclash.yml
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-production-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   deploy:
-    name: Deploy Cloudflare Pages
+    name: Deploy ${{ matrix.project }}
+    if: github.repository == 'GuardSkill/edgetunnel'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - project: yuan-2
+            account_id: fcc7e23c082e6ab4bec6ca9648e67849
+            token_secret: CF_TOKEN_YUAN_2
+            pages_domain: yuan-2-7lm.pages.dev
+          - project: yuan-3
+            account_id: be8b507c7965078c5418fdbb47846c77
+            token_secret: CF_TOKEN_YUAN_3
+            pages_domain: yuan-3-4ut.pages.dev
+          - project: yuan-4
+            account_id: ca43d605b43fac1c9e5b4d9c65a44290
+            token_secret: CF_TOKEN_YUAN_4
+            pages_domain: yuan-4-4ci.pages.dev
+          - project: yuan-5
+            account_id: 57eb4e688c82332dff94bfaa5a17a458
+            token_secret: CF_TOKEN_YUAN_5
+            pages_domain: yuan-5.pages.dev
+          - project: yuan-6
+            account_id: da5a12d57abecf75c1f1ec3c92d4a652
+            token_secret: CF_TOKEN_YUAN_6
+            pages_domain: yuan-6.pages.dev
+
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Deploy yuanclash
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: 9429ba5ae2f400a0cfd35eabfebe8f1c
-          wranglerVersion: 4.106.0
-          command: pages deploy . --project-name=yuanclash --branch=main
+      - name: Stage the tested Pages bundle
+        run: |
+          mkdir -p "$RUNNER_TEMP/pages"
+          cp _worker.js "$RUNNER_TEMP/pages/_worker.js"
+          printf '<!doctype html><meta charset="utf-8"><title>EdgeTunnel</title>' > "$RUNNER_TEMP/pages/index.html"
+
+      - name: Deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets[matrix.token_secret] }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ matrix.account_id }}
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN"
+          cd "$RUNNER_TEMP/pages"
+          npx --yes wrangler@4.165.0 pages deploy . \
+            --project-name "${{ matrix.project }}" \
+            --branch main \
+            --no-bundle \
+            --commit-hash "$GITHUB_SHA"
+
+      - name: Check login page
+        run: |
+          curl --fail --silent --show-error --retry 5 --retry-all-errors \
+            --retry-delay 2 --max-time 20 \
+            "https://${{ matrix.pages_domain }}/login" > /dev/null
