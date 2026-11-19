@@ -18,7 +18,9 @@ concurrency:
 jobs:
   deploy:
     name: Deploy ${{ matrix.project }}
-    if: github.repository == 'GuardSkill/edgetunnel'
+    # Cloudflare currently returns 8000119 for these projects. Re-enable the
+    # repository variable only after Cloudflare confirms deployments are allowed.
+    if: github.repository == 'GuardSkill/edgetunnel' && vars.PAGES_DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

@@ -112,6 +112,10 @@
 
 </details>
 
+#### 本仓库的多账号自动部署
+
+本仓库的 `main` 分支更新 `_worker.js` 时，GitHub Actions 会将其部署到现有的 `yuan-2` 至 `yuan-6` Pages 项目。工作流只上传代码，不修改项目的 `ADMIN`、`UUID`、`KV` 或自定义域名。GitHub 仓库 Secrets 需要分别设置 `CF_TOKEN_YUAN_2` 至 `CF_TOKEN_YUAN_6`，并在 Cloudflare 允许部署时将仓库变量 `PAGES_DEPLOY_ENABLED` 设为 `true`。如需手动触发，可在 Actions 中运行 **Deploy Cloudflare Pages**。`yuan-7` 不在此工作流范围内。
+
 ---
 
 ## 🔑 环境变量说明
