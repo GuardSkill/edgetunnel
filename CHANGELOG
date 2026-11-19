@@ -1,3 +1,11 @@
+## [Unreleased]
+
+### Feature
+
+- 跟进上游 2026-11-10 的 XHTTP 连接复用配置：新增可选 `xmux` 参数和连接数、复用时长等调节项；旧配置默认关闭。
+- 新增 VMess AEAD over WebSocket 入站和节点订阅，支持 TCP 与 AES-128-GCM；可通过 `VMESS=1` 或 KV `协议类型=vmess` 启用。
+- 将出站 TCP 建连超时从固定 1 秒改为默认 3 秒，并允许通过 `TCP_CONNECT_TIMEOUT_MS` 调整；直连 TLS 在 7 秒内没有目标站首包时，尝试现有反代路径，可通过 `TLS_FIRST_BYTE_TIMEOUT_MS` 调整。
+
 ## [2.1.20261008222327] - 2026-10-08 22:23:27
 
 ### Debug

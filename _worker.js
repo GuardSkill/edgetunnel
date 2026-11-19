@@ -9,6 +9,11 @@ const WS早期数据最大字节 = 8 * 1024, WS早期数据最大头长度 = Mat
 const 上行合包目标字节 = 20 * 1024, 上行队列最大字节 = 16 * 1024 * 1024, 上行队列最大条目 = 4096;
 const 下行Grain包字节 = 32 * 1024, 下行Grain尾部阈值 = 512, 下行Grain低水位字节 = Math.max(4096, 下行Grain尾部阈值 * 12), 下行Grain最大等待轮次 = 4;
 let TCP并发拨号数 = 2, 反代并发拨号数 = 1, 预加载竞速拨号 = false;
+let TCP连接超时毫秒 = 3000, TLS首包超时毫秒 = 7000;
+function 读取超时配置(value, fallback, min, max) {
+	const parsed = Number(value);
+	return Number.isFinite(parsed) && parsed >= min && parsed <= max ? Math.round(parsed) : fallback;
+}
 ///////////////////////////////////////////////////////查杀特征码///////////////////////////////////////////////
 const 特征码字典 = [
 	(Proxy.name + "IP").toUpperCase(),
@@ -42,6 +47,8 @@ export default {
 		预加载竞速拨号 = ['1', 'true'].includes(env.PRELOAD_RACE_DIAL) || 预加载竞速拨号;
 		反代并发拨号数 = Math.max(1, Number(env.PROXY_CONCURRENT_DIAL) || 反代并发拨号数);
 		TCP并发拨号数 = Math.max(1, Number(env.TCP_CONCURRENT_DIAL) || TCP并发拨号数);
+		TCP连接超时毫秒 = 读取超时配置(env.TCP_CONNECT_TIMEOUT_MS, 3000, 500, 10000);
+		TLS首包超时毫秒 = 读取超时配置(env.TLS_FIRST_BYTE_TIMEOUT_MS, 7000, 3000, 20000);
 		if (!env.TCP_CONCURRENT_DIAL && TCP并发拨号数 !== 1 && 识别运营商(request) === 'cmcc') TCP并发拨号数 = 1;
 		if (env.PROXYIP) {
 			const proxyIPs = await 整理成数组(env.PROXYIP);
@@ -372,7 +379,7 @@ export default {
 													: 'mixed';
 
 						if (!ua.includes('mozilla')) responseHeaders["Content-Disposition"] = `attachment; filename*=utf-8''${encodeURIComponent(config_JSON.优选订阅生成.SUBNAME)}`;
-						const 协议类型 = ((url.searchParams.has('surge') || ua.includes('surge')) && config_JSON.协议类型 !== 'ss') ? 'tro' + 'jan' : config_JSON.协议类型;
+						const 协议类型 = ((url.searchParams.has('surge') || ua.includes('surge')) && !['ss', 'vmess'].includes(config_JSON.协议类型)) ? 'tro' + 'jan' : config_JSON.协议类型;
 						let 订阅内容 = '';
 						if (订阅类型 === 'mixed') {
 							const TLS分片参数 = config_JSON.TLS分片 == 'Shadowrocket' ? `&fragment=${encodeURIComponent('1,40-60,30-50,tlshello')}` : config_JSON.TLS分片 == 'Happ' ? `&fragment=${encodeURIComponent('3,1,tlshello')}` : '';
@@ -473,7 +480,9 @@ export default {
 								}
 								if (isLoonOrSurge) 完整节点路径 = 完整节点路径.replace(/,/g, '%2C');
 
-								if (协议类型 === 'ss' && !作为优选订阅生成器) {
+								if (协议类型 === 'vmess') {
+									return vmessNode(节点地址, 节点端口, config_JSON.UUID, config_JSON.HOST, 获取传输路径参数值(config_JSON, 完整节点路径, 作为优选订阅生成器), 节点备注, config_JSON);
+								} else if (协议类型 === 'ss' && !作为优选订阅生成器) {
 									if (!config_JSON.SS.TLS) {
 										const TLS端口 = [443, 2053, 2083, 2087, 2096, 8443];
 										const NOTLS端口 = [80, 2052, 2082, 2086, 2095, 8080];
@@ -1326,6 +1335,7 @@ async function 处理WS请求(request, yourUUID, url) {
 	let WS显式队列字节 = 0, WS显式队列条目 = 0;
 	let 判断协议类型 = null, 当前写入Socket = null, 远端写入器 = null;
 	let ss上下文 = null, ss初始化任务 = null;
+	let vmess上下文 = null;
 	let WS本地测速模式 = false, WS本地测速回包Socket = null;
 	let WS本地测速请求缓存 = new Uint8Array(0);
 	let WS本地测速首包响应头 = null;
@@ -1403,7 +1413,9 @@ async function 处理WS请求(request, yourUUID, url) {
 	});
 
 	const 写入远端 = async (chunk, allowRetry = true) => {
-		return 上行写入队列.写入(chunk, allowRetry);
+		const queued = 上行写入队列.写入(chunk, allowRetry);
+		if (queued && 有效数据长度(chunk) > 0) remoteConnWrapper.armTlsFirstByteTimeout?.();
+		return queued;
 	};
 
 	const 获取SS上下文 = async () => {
@@ -1654,6 +1666,17 @@ async function 处理WS请求(request, yourUUID, url) {
 
 	const 处理WS入站数据 = async (chunk) => {
 		let 当前块字节 = null;
+		if (url.searchParams.has('vmess')) {
+			if (!vmess上下文) vmess上下文 = await 创建VMess会话(yourUUID, serverSock);
+			const { 请求, 数据块 } = await vmess上下文.输入(chunk);
+			if (请求 && !vmess上下文.已连接) {
+				vmess上下文.已连接 = true;
+				if (请求.command !== 1) throw new Error('VMess only supports TCP');
+				await forwardataTCP(请求.hostname, 请求.port, null, vmess上下文.回包Socket, null, remoteConnWrapper, yourUUID, request);
+			}
+			for (const 明文 of 数据块) await 写入远端(明文);
+			return;
+		}
 		if (isDnsQuery) {
 			if (判断是否是木马) return await 转发木马UDP数据(chunk, serverSock, 木马UDP上下文, request);
 			return await forwardataudp(chunk, serverSock, null, request);
@@ -2133,7 +2156,7 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 	const ctx代理参数 = 反代上下文.代理参数 || {};
 	const ctx反代兜底 = 反代上下文.反代兜底 !== undefined ? 反代上下文.反代兜底 : true;
 	log(`[TCP转发] 目标: ${host}:${portNum} | 反代IP: ${ctx反代IP} | 反代兜底: ${ctx反代兜底 ? '是' : '否'} | 反代类型: ${ctx代理类型 || 'proxyip'} | 全局: ${ctx代理全局 ? '是' : '否'}`);
-	const 连接超时毫秒 = 1000;
+	const 连接超时毫秒 = TCP连接超时毫秒;
 	let 已通过代理发送首包 = false;
 	const TCP连接 = 创建请求TCP连接器(request);
 	let 待发送响应头 = respHeader;
@@ -2160,7 +2183,8 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 		}
 		remoteConnWrapper.socket = socket;
 		if (仅建立连接) return socket;
-		connectStreams(socket, ws, 取出响应头, retryFunc, 连接仍有效, remoteConnWrapper).catch(err => {
+		const TLS握手首包超时 = retryFunc && Number(portNum) === 443 ? TLS首包超时毫秒 : 0;
+		connectStreams(socket, ws, 取出响应头, retryFunc, 连接仍有效, remoteConnWrapper, TLS握手首包超时, 有效数据长度(rawData) > 0).catch(err => {
 			if (!连接仍有效()) return;
 			log(`[TCP下行] 处理失败: ${err?.message || err}`);
 			try { socket?.close?.() } catch (e) { }
@@ -2170,10 +2194,13 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 	};
 
 	async function 等待连接建立(remoteSock, timeoutMs = 连接超时毫秒) {
-		await Promise.race([
-			remoteSock.opened,
-			new Promise((_, reject) => setTimeout(() => reject(new Error('连接超时')), timeoutMs))
-		]);
+		let timer;
+		try {
+			await Promise.race([
+				remoteSock.opened,
+				new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`连接超时 (${timeoutMs}ms)`)), timeoutMs); })
+			]);
+		} finally { clearTimeout(timer); }
 	}
 
 	async function 打开TCP连接(address, port) {
@@ -2965,9 +2992,21 @@ function 创建下行Grain发送器(webSocket, headerData = null, isActive = nul
 	};
 }
 
-async function connectStreams(remoteSocket, webSocket, headerData, retryFunc, isCurrentSocket = null, remoteConnWrapper = null) {
+async function connectStreams(remoteSocket, webSocket, headerData, retryFunc, isCurrentSocket = null, remoteConnWrapper = null, firstByteTimeoutMs = 0, initialDataSent = false) {
 	let header = headerData, hasData = false, reader, useBYOB = false, readError = null;
 	const BYOB单次读取上限 = 64 * 1024;
+	let firstByteTimer = null, firstByteArmed = false, rejectFirstByte;
+	const firstByteTimeout = new Promise((_, reject) => { rejectFirstByte = reject; });
+	const armTlsFirstByteTimeout = () => {
+		if (!firstByteTimeoutMs || hasData || firstByteArmed) return;
+		firstByteArmed = true;
+		firstByteTimer = setTimeout(() => rejectFirstByte(new Error(`TLS 首包等待超时 (${firstByteTimeoutMs}ms)`)), firstByteTimeoutMs);
+	};
+	if (remoteConnWrapper && firstByteTimeoutMs) remoteConnWrapper.armTlsFirstByteTimeout = armTlsFirstByteTimeout;
+	if (initialDataSent) armTlsFirstByteTimeout();
+	const 读取首包 = async (read) => {
+		return firstByteTimeoutMs && !hasData ? Promise.race([read(), firstByteTimeout]) : read();
+	};
 	const 当前连接仍有效 = () => !isCurrentSocket || isCurrentSocket();
 	const 下行发送器 = 创建下行Grain发送器(webSocket, header, 当前连接仍有效);
 	header = null;
@@ -2981,11 +3020,12 @@ async function connectStreams(remoteSocket, webSocket, headerData, retryFunc, is
 	try {
 		if (!useBYOB) {
 			while (true) {
-				const { done, value } = await reader.read();
+				const { done, value } = await 读取首包(() => reader.read());
 				if (!当前连接仍有效()) break;
 				if (done) break;
 				if (!value || value.byteLength === 0) continue;
 				hasData = true;
+				if (firstByteTimer) { clearTimeout(firstByteTimer); firstByteTimer = null; }
 				if (value.byteLength >= 下行Grain包字节) {
 					await 下行发送器.flush();
 					await 下行发送器.直接发送(value);
@@ -2996,11 +3036,12 @@ async function connectStreams(remoteSocket, webSocket, headerData, retryFunc, is
 		} else {
 			let readBuffer = new ArrayBuffer(BYOB单次读取上限);
 			while (true) {
-				const { done, value } = await reader.read(new Uint8Array(readBuffer, 0, BYOB单次读取上限));
+				const { done, value } = await 读取首包(() => reader.read(new Uint8Array(readBuffer, 0, BYOB单次读取上限)));
 				if (!当前连接仍有效()) break;
 				if (done) break;
 				if (!value || value.byteLength === 0) continue;
 				hasData = true;
+				if (firstByteTimer) { clearTimeout(firstByteTimer); firstByteTimer = null; }
 				if (value.byteLength >= 下行Grain包字节) {
 					await 下行发送器.flush();
 					await 下行发送器.直接发送(value);
@@ -3014,6 +3055,8 @@ async function connectStreams(remoteSocket, webSocket, headerData, retryFunc, is
 		if (当前连接仍有效()) await 下行发送器.flush();
 	} catch (err) { readError = err }
 	finally {
+		if (firstByteTimer) clearTimeout(firstByteTimer);
+		if (remoteConnWrapper?.armTlsFirstByteTimeout === armTlsFirstByteTimeout) remoteConnWrapper.armTlsFirstByteTimeout = null;
 		if (当前连接仍有效() && webSocket.readyState === WebSocket.OPEN) {
 			try { await 下行发送器.停止并刷新() } catch (err) { readError ||= err }
 		}
@@ -3023,6 +3066,7 @@ async function connectStreams(remoteSocket, webSocket, headerData, retryFunc, is
 		try { remoteSocket.close() } catch (e) { }
 	}
 	if (!hasData && retryFunc && webSocket.readyState === WebSocket.OPEN && 当前连接仍有效()) {
+		if (readError) log(`[TCP下行] 首包前读取失败，尝试反代: ${readError?.message || readError}`);
 		try {
 			await retryFunc();
 			return;
@@ -4734,14 +4778,15 @@ function base64SecretDecode(encoded, secret) {
 
 function 获取传输协议配置(配置 = {}) {
 	const 是gRPC = 配置.传输协议 === 'grpc';
-	const [本机Padding头, 本机Padding键] = 获取本机标识(配置.UUID);
+	const [本机标识头, 本机标识键] = 获取本机标识(配置.UUID);
 	const 叉混淆JSON = {
 		"xPaddingObfsMode": true,
 		"xPaddingMethod": "tokenish",
 		"xPaddingPlacement": "queryInHeader",
-		"xPaddingHeader": 本机Padding头,
-		"xPaddingKey": 本机Padding键
+		"xPaddingHeader": 本机标识头,
+		"xPaddingKey": 本机标识键
 	};
+	if (配置.连接复用?.启用 === true) 叉混淆JSON.xmux = 配置.连接复用.xmux;
 	return {
 		type: 是gRPC ? (配置.gRPC模式 === 'multi' ? 'grpc&mode=multi' : 'grpc&mode=gun') : (配置.传输协议 === 'xhttp' ? `xhttp&mode=stream-one&extra=${encodeURIComponent(JSON.stringify(叉混淆JSON))}` : 'ws'),
 		路径字段名: 是gRPC ? 'serviceName' : 'path',
@@ -5549,6 +5594,14 @@ async function DoH查询(域名, 记录类型, DoH解析服务 = "https://cloudf
 
 async function 读取config_JSON(env, hostname, userID, UA = "Mozilla/5.0", 重置配置 = false) {
 	const _p = 特征码字典[0];
+	const xmux默认值 = {
+		maxConnections: 4,
+		maxConcurrency: 0,
+		cMaxReuseTimes: 0,
+		hMaxRequestTimes: 0,
+		hMaxReusableSecs: 3600,
+		hKeepAlivePeriod: 0
+	};
 	const host = hostname, Ali_DoH = "https://dns.alidns.com/dns-query", ECH_SNI = "cloudflare-ech.com", 占位符 = '{{IP:PORT}}', 初始化开始时间 = performance.now(), 默认配置JSON = {
 		TIME: new Date().toISOString(),
 		HOST: host,
@@ -5568,6 +5621,10 @@ async function 读取config_JSON(env, hostname, userID, UA = "Mozilla/5.0", 重�
 		ECHConfig: {
 			DNS: Ali_DoH,
 			SNI: ECH_SNI,
+		},
+		连接复用: {
+			启用: false,
+			xmux: xmux默认值
 		},
 		SS: {
 			加密方式: "aes-128-gcm",
@@ -5665,6 +5722,11 @@ async function 读取config_JSON(env, hostname, userID, UA = "Mozilla/5.0", 重�
 		config_JSON = 默认配置JSON;
 	}
 
+	if (!config_JSON.连接复用 || typeof config_JSON.连接复用 !== 'object') config_JSON.连接复用 = { 启用: false, xmux: { ...xmux默认值 } };
+	else {
+		config_JSON.连接复用.启用 = config_JSON.连接复用.启用 === true;
+		config_JSON.连接复用.xmux = { ...xmux默认值, ...(config_JSON.连接复用.xmux && typeof config_JSON.连接复用.xmux === 'object' ? config_JSON.连接复用.xmux : {}) };
+	}
 	if (!config_JSON.订阅转换配置.SUBLIST) config_JSON.订阅转换配置.SUBLIST = false;
 	config_JSON.订阅转换配置.SUBEMOJI = true;
 	if (!config_JSON.订阅转换配置.UDP) config_JSON.订阅转换配置.UDP = false;
@@ -5674,6 +5736,8 @@ async function 读取config_JSON(env, hostname, userID, UA = "Mozilla/5.0", 重�
 	if (!config_JSON.订阅转换配置.SORT) config_JSON.订阅转换配置.SORT = false;
 	if (typeof config_JSON.订阅转换配置.EXPAND !== 'boolean') config_JSON.订阅转换配置.EXPAND = true;
 	if (!config_JSON.gRPCUserAgent) config_JSON.gRPCUserAgent = UA;
+	if (['1', 'true'].includes(String(env.VMESS || '').toLowerCase())) config_JSON.协议类型 = 'vmess';
+	if (config_JSON.协议类型 === 'vmess') config_JSON.传输协议 = 'ws';
 	config_JSON.HOST = host;
 	if (!config_JSON.HOSTS) config_JSON.HOSTS = [hostname];
 	if (env.HOST) config_JSON.HOSTS = (await 整理成数组(env.HOST)).map(h => h.toLowerCase().replace(/^https?:\/\//, '').split('/')[0].split(':')[0]);
@@ -5747,7 +5811,11 @@ async function 读取config_JSON(env, hostname, userID, UA = "Mozilla/5.0", 重�
 	const ECHLINK参数 = config_JSON.ECH ? `&ech=${encodeURIComponent((config_JSON.ECHConfig.SNI ? config_JSON.ECHConfig.SNI + '+' : '') + config_JSON.ECHConfig.DNS)}` : '';
 	const { type: 传输协议, 路径字段名, 域名字段名 } = 获取传输协议配置(config_JSON);
 	const 传输路径参数值 = 获取传输路径参数值(config_JSON, config_JSON.完整节点路径);
-	config_JSON.LINK = config_JSON.协议类型 === 'ss'
+	const vmessLink = vmessNode(host, 443, userID, host, 获取传输路径参数值(config_JSON, config_JSON.完整节点路径), config_JSON.优选订阅生成.SUBNAME, config_JSON);
+	config_JSON.VMESS_LINK = vmessLink;
+	config_JSON.LINK = config_JSON.协议类型 === 'vmess'
+		? vmessLink
+		: config_JSON.协议类型 === 'ss'
 		? `${config_JSON.协议类型}://${btoa(config_JSON.SS.加密方式 + ':' + userID)}@${host}:${config_JSON.SS.TLS ? '443' : '80'}?plugin=v2${encodeURIComponent(`ray-plugin;mode=websocket;host=${host};path=${((config_JSON.完整节点路径.includes('?') ? config_JSON.完整节点路径.replace('?', '?enc=' + config_JSON.SS.加密方式 + '&') : (config_JSON.完整节点路径 + '?enc=' + config_JSON.SS.加密方式)) + (config_JSON.SS.TLS ? ';tls' : ''))};mux=0`) + ECHLINK参数}#${encodeURIComponent(config_JSON.优选订阅生成.SUBNAME)}`
 		: `${config_JSON.协议类型}://${userID}@${host}:443?security=tls&type=${传输协议 + ECHLINK参数}&${域名字段名}=${host}&fp=${config_JSON.Fingerprint}&sni=${host}&${路径字段名}=${encodeURIComponent(传输路径参数值) + TLS分片参数}&encryption=none#${encodeURIComponent(config_JSON.优选订阅生成.SUBNAME)}`;
 	config_JSON.优选订阅生成.TOKEN = await MD5MD5(hostname + userID);
@@ -5936,6 +6004,33 @@ async function 注入AdminProxyIP选择器(response) {
 
 	function findProxyIPInput() {
 		return document.getElementById('proxyIP') || document.querySelector('input[title="PROXYIP"]');
+	}
+
+	function addVmessLink(config) {
+		if (document.getElementById('edgetunnel-vmess-link')) return;
+		const link = config && config.VMESS_LINK;
+		if (!link) return;
+		const nodeInput = document.getElementById('LinkURL');
+		const row = nodeInput?.closest('.form-group');
+		if (!row || !row.parentElement) return;
+		const vmessRow = row.cloneNode(true);
+		vmessRow.id = 'edgetunnel-vmess-link';
+		const label = vmessRow.querySelector('label');
+		label.htmlFor = 'VmessLinkURL';
+		label.textContent = 'VMess 节点链接';
+		const input = vmessRow.querySelector('input');
+		input.id = 'VmessLinkURL';
+		input.title = 'VMess AEAD / WebSocket / TLS';
+		input.value = link;
+		const buttons = vmessRow.querySelectorAll('button');
+		buttons[0].setAttribute('onclick', "showQRCode('VmessLinkURL')");
+		buttons[1].setAttribute('onclick', "copySubscription('VmessLinkURL')");
+		buttons[1].textContent = '复制 VMess';
+		row.parentElement.insertBefore(vmessRow, row.nextSibling);
+	}
+
+	async function loadVmessLink() {
+		try { const response = await fetch('/admin/config.json?_vmess_link=' + Date.now(), { cache: 'no-store' }); if (response.ok) addVmessLink(await response.json()); } catch {}
 	}
 
 	function getSourceSelect() {
@@ -6137,6 +6232,7 @@ async function 注入AdminProxyIP选择器(response) {
 	document.addEventListener('DOMContentLoaded', () => {
 		patchAdminProxyFunctions();
 		ensureSelector();
+		loadVmessLink();
 	});
 	patchAdminProxyFunctions();
 	ensureSelector();
@@ -7061,4 +7157,213 @@ async function html1101(host, 访问IP) {
   </script>
 </body>
 </html>`;
+}
+
+// VMess AEAD over WebSocket. Only AES-128-GCM/TCP is advertised; the other
+// VMess ciphers and multiplexing commands require separate implementations.
+const VMESS_TEXT = new TextEncoder();
+const VMESS_KDF_ROOT = VMESS_TEXT.encode('VMess AEAD KDF');
+const VMESS_REPLAY = new Map();
+function vmessConcat(...parts) {
+	const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+	let offset = 0;
+	for (const part of parts) { out.set(part, offset); offset += part.length; }
+	return out;
+}
+async function vmessHash(key, message) {
+	const imported = await crypto.subtle.importKey('raw', key, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+	return new Uint8Array(await crypto.subtle.sign('HMAC', imported, message));
+}
+async function vmessKDF(key, ...path) {
+	const run = async (level, message) => {
+		if (level < 0) return vmessHash(VMESS_KDF_ROOT, message);
+		const block = new Uint8Array(64);
+		block.set(typeof path[level] === 'string' ? VMESS_TEXT.encode(path[level]) : path[level]);
+		const inner = block.map(b => b ^ 0x36), outer = block.map(b => b ^ 0x5c);
+		return run(level - 1, vmessConcat(outer, await run(level - 1, vmessConcat(inner, message))));
+	};
+	return run(path.length - 1, key);
+}
+async function vmessGcm(key, nonce, data, decrypt = false, aad = new Uint8Array(0)) {
+	const imported = await crypto.subtle.importKey('raw', key, 'AES-GCM', false, [decrypt ? 'decrypt' : 'encrypt']);
+	const result = await crypto.subtle[decrypt ? 'decrypt' : 'encrypt']({ name: 'AES-GCM', iv: nonce, additionalData: aad, tagLength: 128 }, imported, data);
+	return new Uint8Array(result);
+}
+async function vmessAesBlockDecrypt(key, block) {
+	// WebCrypto has no ECB mode. A second CBC block with valid PKCS#7 padding
+	// lets us recover the first raw decrypted block without exporting a key.
+	const imported = await crypto.subtle.importKey('raw', key, 'AES-CBC', false, ['encrypt', 'decrypt']);
+	const paddingBlock = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-CBC', iv: block }, imported, new Uint8Array(0)));
+	return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-CBC', iv: new Uint8Array(16) }, imported, vmessConcat(block, paddingBlock)));
+}
+function vmessCRC32(bytes) {
+	let crc = 0xffffffff;
+	for (const byte of bytes) {
+		crc ^= byte;
+		for (let j = 0; j < 8; j++) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+	}
+	return (crc ^ 0xffffffff) >>> 0;
+}
+function vmessFNV1a(bytes) {
+	let hash = 0x811c9dc5;
+	for (const byte of bytes) hash = Math.imul(hash ^ byte, 0x01000193) >>> 0;
+	return hash;
+}
+const VMESS_KECCAK_ROUNDS = [
+	0x0000000000000001n, 0x0000000000008082n, 0x800000000000808an, 0x8000000080008000n,
+	0x000000000000808bn, 0x0000000080000001n, 0x8000000080008081n, 0x8000000000008009n,
+	0x000000000000008an, 0x0000000000000088n, 0x0000000080008009n, 0x000000008000000an,
+	0x000000008000808bn, 0x800000000000008bn, 0x8000000000008089n, 0x8000000000008003n,
+	0x8000000000008002n, 0x8000000000000080n, 0x000000000000800an, 0x800000008000000an,
+	0x8000000080008081n, 0x8000000000008080n, 0x0000000080000001n, 0x8000000080008008n,
+];
+const VMESS_KECCAK_ROT = [0, 1, 62, 28, 27, 36, 44, 6, 55, 20, 3, 10, 43, 25, 39, 41, 45, 15, 21, 8, 18, 2, 61, 56, 14];
+const VMESS_U64 = (1n << 64n) - 1n;
+function vmessKeccak(state) {
+	for (const rc of VMESS_KECCAK_ROUNDS) {
+		const c = Array.from({ length: 5 }, (_, x) => state[x] ^ state[x + 5] ^ state[x + 10] ^ state[x + 15] ^ state[x + 20]);
+		for (let x = 0; x < 5; x++) {
+			const d = c[(x + 4) % 5] ^ ((c[(x + 1) % 5] << 1n | c[(x + 1) % 5] >> 63n) & VMESS_U64);
+			for (let y = 0; y < 5; y++) state[x + 5 * y] ^= d;
+		}
+		const b = Array(25);
+		for (let y = 0; y < 5; y++) for (let x = 0; x < 5; x++) {
+			const i = x + 5 * y, r = BigInt(VMESS_KECCAK_ROT[i]);
+			b[y + 5 * ((2 * x + 3 * y) % 5)] = r === 0n ? state[i] : ((state[i] << r) | (state[i] >> (64n - r))) & VMESS_U64;
+		}
+		for (let y = 0; y < 5; y++) for (let x = 0; x < 5; x++) state[x + 5 * y] = b[x + 5 * y] ^ ((~b[(x + 1) % 5 + 5 * y] & VMESS_U64) & b[(x + 2) % 5 + 5 * y]);
+		state[0] ^= rc;
+	}
+}
+function vmessShake128(seed) {
+	const state = Array(25).fill(0n), rate = 168;
+	const input = new Uint8Array(Math.ceil((seed.length + 1) / rate) * rate || rate);
+	input.set(seed); input[seed.length] ^= 0x1f; input[input.length - 1] ^= 0x80;
+	for (let pos = 0; pos < input.length; pos += rate) {
+		for (let i = 0; i < rate; i++) state[i >> 3] ^= BigInt(input[pos + i]) << BigInt((i & 7) * 8);
+		vmessKeccak(state);
+	}
+	let position = 0;
+	return () => {
+		if (position + 2 > rate) { vmessKeccak(state); position = 0; }
+		const getByte = i => Number((state[i >> 3] >> BigInt((i & 7) * 8)) & 255n);
+		const value = (getByte(position) << 8) | getByte(position + 1);
+		position += 2;
+		return value;
+	};
+}
+function vmessChunkNonce(iv, counter) {
+	const nonce = iv.slice(0, 12);
+	nonce[0] = (counter >> 8) & 255; nonce[1] = counter & 255;
+	return nonce;
+}
+function vmessNode(address, port, uuid, host, path, name, config = {}) {
+	const cleanPath = path.replace(/([?&])ed=\d+(&?)/, (_, separator, trailing) => separator === '?' && trailing ? '?' : trailing ? '&' : '').replace(/[?&]$/, '');
+	const wsPath = cleanPath + (cleanPath.includes('?') ? '&' : '?') + 'vmess=1';
+	const node = { v: '2', ps: name, add: address, port: String(port), id: uuid, aid: '0', scy: 'aes-128-gcm', net: 'ws', type: 'none', host, path: wsPath, tls: 'tls', sni: host };
+	if (config.ALPN) node.alpn = config.ALPN;
+	if (config.Fingerprint) node.fp = config.Fingerprint;
+	return 'vmess://' + btoa(unescape(encodeURIComponent(JSON.stringify(node))));
+}
+async function 创建VMess会话(uuid, socket) {
+	const uuidBytes = Uint8Array.from(uuid.replace(/-/g, '').match(/../g), hex => parseInt(hex, 16));
+	const cmdKey = new Uint8Array(await crypto.subtle.digest('MD5', vmessConcat(uuidBytes, VMESS_TEXT.encode('c48619fe-8f02-49e0-b9e9-edf763e17e21'))));
+	const authKey = (await vmessKDF(cmdKey, 'AES Auth ID Encryption')).slice(0, 16);
+	const state = { buffer: new Uint8Array(0), header: null, pendingLength: null, padding: 0, inCounter: 0, outCounter: 0, responseSent: false, 已连接: false };
+	let outbound = Promise.resolve();
+	const send = data => {
+		outbound = outbound.then(async () => {
+			if (!state.header || socket.readyState !== WebSocket.OPEN) return;
+			const h = state.header, parts = [];
+			if (!state.responseSent) {
+				const bodyKey = new Uint8Array(await crypto.subtle.digest('SHA-256', h.bodyKey)).slice(0, 16);
+				const bodyIV = new Uint8Array(await crypto.subtle.digest('SHA-256', h.bodyIV)).slice(0, 16);
+				h.responseKey = bodyKey; h.responseIV = bodyIV; h.responseMask = vmessShake128(bodyIV);
+				const lenKey = (await vmessKDF(bodyKey, 'AEAD Resp Header Len Key')).slice(0, 16);
+				const lenIV = (await vmessKDF(bodyIV, 'AEAD Resp Header Len IV')).slice(0, 12);
+				const headKey = (await vmessKDF(bodyKey, 'AEAD Resp Header Key')).slice(0, 16);
+				const headIV = (await vmessKDF(bodyIV, 'AEAD Resp Header IV')).slice(0, 12);
+				parts.push(await vmessGcm(lenKey, lenIV, new Uint8Array([0, 4])));
+				parts.push(await vmessGcm(headKey, headIV, new Uint8Array([h.responseByte, 0, 0, 0])));
+				state.responseSent = true;
+			}
+			const bytes = 数据转Uint8Array(data);
+			for (let offset = 0; offset < bytes.length; offset += 16000) {
+				const plain = bytes.subarray(offset, offset + 16000);
+				const cipher = await vmessGcm(h.responseKey, vmessChunkNonce(h.responseIV, state.outCounter++), plain);
+				const padding = h.options & 0x08 ? h.responseMask() % 64 : 0;
+				const size = cipher.length + padding, mask = h.options & 0x04 ? h.responseMask() : 0;
+				const frame = new Uint8Array(2 + size);
+				frame[0] = ((size ^ mask) >> 8) & 255; frame[1] = (size ^ mask) & 255;
+				frame.set(cipher, 2);
+				if (padding) crypto.getRandomValues(frame.subarray(2 + cipher.length));
+				parts.push(frame);
+			}
+			if (parts.length) await WebSocket发送并等待(socket, vmessConcat(...parts));
+		}).catch(error => { log(`[VMess] 发送失败: ${error?.message || error}`); closeSocketQuietly(socket); });
+		return outbound;
+	};
+	return {
+		get 已连接() { return state.已连接; }, set 已连接(value) { state.已连接 = value; },
+		回包Socket: { get readyState() { return socket.readyState; }, send, close() { closeSocketQuietly(socket); } },
+		async 输入(chunk) {
+			state.buffer = vmessConcat(state.buffer, 数据转Uint8Array(chunk));
+			if (state.buffer.length > 1024 * 1024) throw new Error('VMess input buffer too large');
+			let request = null;
+			if (!state.header) {
+				if (state.buffer.length < 42) return { 请求: null, 数据块: [] };
+				const authID = state.buffer.subarray(0, 16);
+				const authPlain = await vmessAesBlockDecrypt(authKey, authID);
+				const authTime = new DataView(authPlain.buffer).getBigUint64(0);
+				if (authTime > BigInt(Math.floor(Date.now() / 1000) + 120) || authTime + 120n < BigInt(Math.floor(Date.now() / 1000))) throw new Error('VMess auth time expired');
+				if (vmessCRC32(authPlain.subarray(0, 12)) !== new DataView(authPlain.buffer).getUint32(12)) throw new Error('VMess auth invalid');
+				const replayKey = Array.from(authID, b => b.toString(16).padStart(2, '0')).join('');
+				if (VMESS_REPLAY.has(replayKey)) throw new Error('VMess replayed auth ID');
+				const nonce = state.buffer.subarray(34, 42);
+				const lenKey = (await vmessKDF(cmdKey, 'VMess Header AEAD Key_Length', authID, nonce)).slice(0, 16);
+				const lenIV = (await vmessKDF(cmdKey, 'VMess Header AEAD Nonce_Length', authID, nonce)).slice(0, 12);
+				const lenBytes = await vmessGcm(lenKey, lenIV, state.buffer.subarray(16, 34), true, authID);
+				const length = (lenBytes[0] << 8) | lenBytes[1];
+				if (length < 46 || length > 1024) throw new Error('VMess header length invalid');
+				if (state.buffer.length < 42 + length + 16) return { 请求: null, 数据块: [] };
+				const headKey = (await vmessKDF(cmdKey, 'VMess Header AEAD Key', authID, nonce)).slice(0, 16);
+				const headIV = (await vmessKDF(cmdKey, 'VMess Header AEAD Nonce', authID, nonce)).slice(0, 12);
+				const plain = await vmessGcm(headKey, headIV, state.buffer.subarray(42, 42 + length + 16), true, authID);
+				if (plain[0] !== 1) throw new Error('VMess version unsupported');
+				const options = plain[34], security = plain[35] & 15, padding = plain[35] >> 4;
+				if (security !== 3 || !(options & 1) || (options & 0x10)) throw new Error('VMess requires AES-128-GCM chunk mode');
+				const port = (plain[38] << 8) | plain[39], type = plain[40];
+				let cursor = 41, hostname;
+				if (type === 1) { if (cursor + 4 > plain.length) throw new Error('VMess IPv4 truncated'); hostname = Array.from(plain.subarray(cursor, cursor + 4)).join('.'); cursor += 4; }
+				else if (type === 2) { const size = plain[cursor++]; if (cursor + size > plain.length) throw new Error('VMess domain truncated'); hostname = new TextDecoder().decode(plain.subarray(cursor, cursor + size)); cursor += size; }
+				else if (type === 3) { if (cursor + 16 > plain.length) throw new Error('VMess IPv6 truncated'); const view = new DataView(plain.buffer, plain.byteOffset + cursor, 16); hostname = Array.from({ length: 8 }, (_, i) => view.getUint16(i * 2).toString(16)).join(':'); cursor += 16; }
+				else throw new Error('VMess address type unsupported');
+				const checksumPos = cursor + padding;
+				if (!port || !hostname || checksumPos + 4 !== plain.length || vmessFNV1a(plain.subarray(0, checksumPos)) !== new DataView(plain.buffer, plain.byteOffset + checksumPos, 4).getUint32(0)) throw new Error('VMess header checksum invalid');
+				if (VMESS_REPLAY.size > 1024) for (const [key, time] of VMESS_REPLAY) if (time < Date.now() - 120000) VMESS_REPLAY.delete(key);
+				VMESS_REPLAY.set(replayKey, Date.now());
+				state.header = { bodyIV: plain.slice(1, 17), bodyKey: plain.slice(17, 33), responseByte: plain[33], options, mask: vmessShake128(plain.slice(1, 17)) };
+				state.buffer = state.buffer.slice(42 + length + 16);
+				request = { hostname, port, command: plain[37] };
+			}
+			const chunks = [], h = state.header;
+			while (true) {
+				if (state.pendingLength === null) {
+					if (state.buffer.length < 2) break;
+					state.padding = h.options & 0x08 ? h.mask() % 64 : 0;
+					const mask = h.options & 0x04 ? h.mask() : 0;
+					state.pendingLength = (((state.buffer[0] << 8) | state.buffer[1]) ^ mask);
+					state.buffer = state.buffer.slice(2);
+					if (state.pendingLength < state.padding + 16 || state.pendingLength > 16384) throw new Error('VMess chunk length invalid');
+				}
+				if (state.buffer.length < state.pendingLength) break;
+				const cipher = state.buffer.subarray(0, state.pendingLength - state.padding);
+				const plain = await vmessGcm(h.bodyKey, vmessChunkNonce(h.bodyIV, state.inCounter++), cipher, true);
+				if (plain.length) chunks.push(plain);
+				state.buffer = state.buffer.slice(state.pendingLength);
+				state.pendingLength = null;
+			}
+			return { 请求: request, 数据块: chunks };
+		}
+	};
 }

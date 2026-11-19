@@ -19,7 +19,7 @@
 
 ### ✨ 核心特性
 
-- 🛡️ **协议支持**：支持 VLESS、Trojan、Shadowsocks 等主流协议，深度集成加密传输。
+- 🛡️ **协议支持**：支持 VLESS、Trojan、Shadowsocks、VMess AEAD 等主流协议，深度集成加密传输。
 - 📊 **管理面板**：内置可视化后台，支持实时配置修改、日志查看及流量统计。
 - 🛠️ **部署灵活**：完整适配 CF Workers 及 CF Pages (GitHub / 上传)。
 - 🔄 **订阅系统**：内置自动订阅生成及混淆转换，适配主流客户端（Clash, Sing-box, Surge 等）。
@@ -130,6 +130,19 @@
 | **PRELOAD_RACE_DIAL** | ❌ | `1`或`true` | 默认**关闭**作为**预加载竞速拨号**的功能，设置`1`或`true`则**开启**该功能 |
 | **TCP_CONCURRENT_DIAL**   | ❌ | `2` | **TCP 并发拨号数**，默认值为`2`；设置后不再根据中国移动网络自动降为单路 |
 | **PROXY_CONCURRENT_DIAL** | ❌ | `1` | **反代并发拨号数**，默认值为`1`；数值越高连接速度越快，但 IP 切换也越频繁 |
+| **TCP_CONNECT_TIMEOUT_MS** | ❌ | `3000` | Worker 到目标站的 TCP 建连等待时间，默认 3000 毫秒，可设置 500–10000 毫秒 |
+| **TLS_FIRST_BYTE_TIMEOUT_MS** | ❌ | `7000` | 直连 443 端口发送首包后等待目标站回包的时间，超时后尝试现有反代路径；默认 7000 毫秒，可设置 3000–20000 毫秒 |
+| **VMESS** | ❌ | `1` | 将本部署的节点和订阅切换为 VMess AEAD over WebSocket；仅支持 TCP 和 `aes-128-gcm`，不支持 UDP、Mux 或旧版 VMess |
+
+### VMess 节点
+
+在 Worker 中设置 `VMESS=1` 并重新部署，或将 KV 的 `config.json` 中 `协议类型` 设为 `vmess`，即可在后台链接和订阅中生成 VMess 节点。VMess 节点使用现有 UUID、域名、优选地址和反代路径，传输固定为 WebSocket + TLS，客户端加密方式为 `aes-128-gcm`、`alterId=0`。部署后重新获取订阅并在客户端测试 TCP 访问。
+
+VMess 不会改善客户端到 Cloudflare 或 Worker 到目标站的 TLS 握手故障；如果目标只是加密强度，现有 VLESS + TLS 已提供传输加密。
+
+### XHTTP 连接复用
+
+跟进上游连接复用设置：在后台启用 XHTTP 连接复用后，节点链接会携带 `xmux` 参数。默认关闭；可通过配置中的 `连接复用.xmux` 调整最大连接数、最大并发数和连接复用时长等参数。此设置只影响 XHTTP 节点，不影响 VMess 的 WebSocket 节点。
 
 ---
 
